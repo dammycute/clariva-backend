@@ -1,7 +1,8 @@
 import json
 from io import StringIO
-from django.core import serializers
+from django.core import serializers as dj_serializers
 from django.core.management import call_command
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -33,13 +34,44 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if not school_id:
             return Response({'error': 'No school assigned'}, status=status.HTTP_400_BAD_REQUEST)
 
-        buf = StringIO()
-        call_command('dumpdata', '--natural-foreign', '--natural-primary', stdout=buf)
-        all_data = json.loads(buf.getvalue())
+        from apps.students.models import Student
+        from apps.classes.models import Class
+        from apps.staff.models import Staff
+        from apps.fees.models import FeeItem, FeeInvoice, FeeInvoiceItem
+        from apps.attendance.models import Attendance
+        from apps.grades.models import Grade
+        from apps.exams.models import Subject, TimeTable, ReportCard
+        from apps.comms.models import Announcement
 
-        school_data = [obj for obj in all_data if obj.get('fields', {}).get('school') == school_id or
-                       obj.get('pk') == school_id]
-        return Response({'school_id': school_id, 'count': len(school_data), 'data': school_data})
+        models_to_backup = {
+            'students': (Student,),
+            'classes': (Class,),
+            'staff': (Staff,),
+            'fee_items': (FeeItem,),
+            'fee_invoices': (FeeInvoice,),
+            'fee_invoice_items': (FeeInvoiceItem,),
+            'attendance': (Attendance,),
+            'grades': (Grade,),
+            'subjects': (Subject,),
+            'timetables': (TimeTable,),
+            'report_cards': (ReportCard,),
+            'announcements': (Announcement,),
+        }
+
+        backup_data = {}
+        counts = {}
+        for name, (model,) in models_to_backup.items():
+            qs = model.objects.filter(school_id=school_id)
+            counts[name] = qs.count()
+            backup_data[name] = dj_serializers.serialize('json', qs)
+
+        return Response({
+            'school_id': school_id,
+            'version': '1.0',
+            'exported_at': timezone.now().isoformat(),
+            'data': backup_data,
+            'counts': counts,
+        })
 
     @action(detail=False, methods=['post'])
     def restore(self, request):

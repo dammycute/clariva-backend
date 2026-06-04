@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class ActivityLog(models.Model):
+class ActivityLog(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE, null=True, blank=True)
     user = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True)
     action = models.CharField(max_length=50)

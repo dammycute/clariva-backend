@@ -27,10 +27,21 @@ class StaffViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         staff = self.get_object()
         if staff.user_id:
             return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
-        email = staff.email or f'staff{staff.id}@school.local'
+        if staff.email:
+            email = staff.email
+        else:
+            name_part = staff.full_name.lower().replace(' ', '.')
+            email = f'{name_part}@{staff.school.subdomain}.clariva.ng'
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+        name_part = staff.full_name.split()[0].lower()
+        base = f'{name_part}{staff.id}'
+        username = base
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f'{base}{counter}'
+            counter += 1
         user = User.objects.create_user(
-            username=email.split('@')[0],
+            username=username,
             email=email,
             password=password,
             first_name=staff.full_name.split(' ')[0],

@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Announcement(models.Model):
+class Announcement(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
     body = models.TextField()

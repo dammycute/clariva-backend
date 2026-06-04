@@ -1,6 +1,8 @@
+from datetime import time
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Subject(models.Model):
+class Subject(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=20, null=True, blank=True)
@@ -15,7 +17,7 @@ class Subject(models.Model):
     def __str__(self):
         return f'{self.name} ({self.year_group or "All"})'
 
-class StudentSubject(models.Model):
+class StudentSubject(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
@@ -28,7 +30,7 @@ class StudentSubject(models.Model):
     def __str__(self):
         return f'{self.student.full_name} — {self.subject.name}'
 
-class Exam(models.Model):
+class Exam(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
@@ -42,9 +44,10 @@ class Exam(models.Model):
     status = models.CharField(max_length=20, default='draft')
     shuffle_questions = models.BooleanField(default=False)
     shuffle_options = models.BooleanField(default=False)
+    time_limit_enforced = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
-class Question(models.Model):
+class Question(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     exam = models.ForeignKey(Exam, on_delete=models.SET_NULL, null=True, blank=True)
     body = models.TextField()
@@ -59,13 +62,13 @@ class Question(models.Model):
     mark = models.IntegerField(default=1)
     created_at = models.DateTimeField(auto_now_add=True)
 
-class TimeTable(models.Model):
+class TimeTable(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     class_group = models.ForeignKey('classes.Class', on_delete=models.CASCADE)
     term = models.CharField(max_length=50)
     academic_year = models.CharField(max_length=20)
     is_published = models.BooleanField(default=False)
-    start_time = models.TimeField(default='08:00', help_text='First period start time')
+    start_time = models.TimeField(default=time(8, 0), help_text='First period start time')
     period_duration = models.IntegerField(default=40, help_text='Minutes per period')
     period_count = models.IntegerField(default=8, help_text='Number of periods per day')
     short_break_after_period = models.IntegerField(default=0, help_text='Period after which short break occurs (0 = none)')
@@ -106,7 +109,7 @@ DAY_CHOICES = [
     (3, 'Thursday'), (4, 'Friday'),
 ]
 
-class TimeSlot(models.Model):
+class TimeSlot(BaseUUIDModel):
     timetable = models.ForeignKey(TimeTable, on_delete=models.CASCADE, related_name='slots')
     day = models.IntegerField(choices=DAY_CHOICES)
     period = models.IntegerField(help_text='Period number (1-based)')
@@ -124,7 +127,7 @@ class TimeSlot(models.Model):
         return f'{self.get_day_display()} P{self.period} — {self.subject.name if self.subject else "Free"}'
 
 
-class ReportCard(models.Model):
+class ReportCard(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
     term = models.CharField(max_length=50)
@@ -143,7 +146,7 @@ class ReportCard(models.Model):
         return f'{self.student.full_name} — {self.term} {self.academic_year}'
 
 
-class ExamSession(models.Model):
+class ExamSession(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
     student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
@@ -156,4 +159,11 @@ class ExamSession(models.Model):
     answers = models.JSONField(null=True, blank=True)
     tab_switches = models.IntegerField(default=0)
     device_info = models.JSONField(null=True, blank=True)
+    question_order = models.JSONField(null=True, blank=True)
+    late_submission = models.BooleanField(default=False)
     status = models.CharField(max_length=20, default='pending')
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['exam', 'student'], name='unique_exam_student'),
+        ]

@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Staff(models.Model):
+class Staff(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     user = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True)
     full_name = models.CharField(max_length=255)

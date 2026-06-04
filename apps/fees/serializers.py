@@ -11,15 +11,25 @@ class FeeItemSerializer(serializers.ModelSerializer):
         read_only_fields = ('school',)
 
     def validate(self, attrs):
-        if attrs.get('class_group') and attrs.get('year_group'):
-            raise serializers.ValidationError('Cannot set both a specific class and a year group.')
+        if attrs.get('class_group') and (attrs.get('year_group') or attrs.get('arm')):
+            raise serializers.ValidationError('Cannot set both a specific class and a year group/arm.')
         return attrs
 
     def get_class_name(self, obj):
+        if obj.year_group and obj.arm:
+            return f'{obj.year_group} {obj.arm} Arms (All Classes)'
+        if obj.arm:
+            return f'Arm {obj.arm} (All Year Groups)'
         if obj.year_group:
-            return f'{obj.year_group} (All Arms)'
+            has_tiers = obj.pricing_tiers and any(k.startswith(obj.year_group) for k in obj.pricing_tiers)
+            if has_tiers:
+                return f'{obj.year_group} (Tiered)'
+            label = 'All Classes' if len(obj.year_group) <= 3 else 'All Arms'
+            return f'{obj.year_group} ({label})'
         if obj.class_group:
             return obj.class_group.name if obj.class_group else 'All Classes'
+        if obj.pricing_tiers:
+            return 'Tiered (All Classes)'
         return 'All Classes'
 
 

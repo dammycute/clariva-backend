@@ -1,5 +1,7 @@
 from django.db import models
+from rest_framework.exceptions import PermissionDenied
 from apps.audit.models import ActivityLog
+from apps.schools.models import School
 
 
 class SchoolFilterMixin:
@@ -10,7 +12,13 @@ class SchoolFilterMixin:
         if not user.school_id:
             if user.is_superuser or user.role == 'super_admin':
                 return self.queryset.all()
-            return self.queryset.none()
+            raise PermissionDenied(
+                'No school is assigned to your account. Contact your administrator.'
+            )
+        if not user.is_superuser and user.role != 'super_admin':
+            school = School.objects.get(pk=user.school_id)
+            if school.status == 'suspended':
+                raise PermissionDenied('This school account has been suspended.')
         return self.queryset.filter(school=user.school)
 
     def perform_create(self, serializer):

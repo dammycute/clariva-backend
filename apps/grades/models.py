@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Grade(models.Model):
+class Grade(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
     subject = models.ForeignKey('exams.Subject', on_delete=models.CASCADE)

@@ -1,5 +1,6 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from apps.base.models import BaseUUIDModel
 
 DEFAULT_GRADE_BOUNDARIES = [
     {"name": "A1", "min_pct": 75}, {"name": "B2", "min_pct": 70},
@@ -10,7 +11,7 @@ DEFAULT_GRADE_BOUNDARIES = [
 ]
 
 
-class GradingConfig(models.Model):
+class GradingConfig(BaseUUIDModel):
     school = models.OneToOneField('schools.School', on_delete=models.CASCADE, related_name='grading_config')
     max_ca1 = models.IntegerField(default=30, validators=[MinValueValidator(0)])
     max_ca2 = models.IntegerField(default=30, validators=[MinValueValidator(0)])
@@ -42,7 +43,7 @@ class GradingConfig(models.Model):
         return f'{self.school.name} Grading'
 
 
-class School(models.Model):
+class School(BaseUUIDModel):
     name = models.CharField(max_length=255)
     subdomain = models.CharField(max_length=100, unique=True)
     logo_url = models.URLField(null=True, blank=True)

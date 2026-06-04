@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Class(models.Model):
+class Class(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     name = models.CharField(max_length=100)
     year_group = models.CharField(max_length=20, null=True, blank=True)

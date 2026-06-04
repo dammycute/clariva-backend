@@ -1,6 +1,7 @@
 from django.db import models
+from apps.base.models import BaseUUIDModel
 
-class Attendance(models.Model):
+class Attendance(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
     class_group = models.ForeignKey('classes.Class', on_delete=models.SET_NULL, null=True, blank=True)

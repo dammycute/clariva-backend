@@ -15,4 +15,5 @@ urlpatterns = [
     path('api/exams/', include('apps.exams.urls')),
     path('api/comms/', include('apps.comms.urls')),
     path('api/audit/', include('apps.audit.urls')),
+    path('api/portal/', include('apps.guardian.urls')),
 ]

@@ -7,7 +7,7 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields.pop('username', None)
-        self.fields['email'] = serializers.EmailField()
+        self.fields['email'] = serializers.CharField()
 
     def validate(self, attrs):
         attrs['username'] = attrs.pop('email')
@@ -17,6 +17,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
 
     username = serializers.CharField(required=False)
+    email = serializers.CharField(required=False)
 
     class Meta:
         model = User

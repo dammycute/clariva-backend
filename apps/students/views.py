@@ -78,15 +78,30 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         updated = Student.objects.filter(id__in=student_ids, school=request.user.school).update(class_group_id=target_class_id)
         return Response({'promoted': updated})
 
+    def _sanitize_admission(self, admission_no):
+        return admission_no.replace('/', '-').replace(' ', '-').replace('.', '-').lower()
+
+    def _generate_student_username(self, student):
+        first_name = student.full_name.split()[0].lower()
+        suffix = self._sanitize_admission(student.admission_no)
+        base = f'{first_name}.{suffix}'
+        username = base
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f'{base}{counter}'
+            counter += 1
+        return username
+
     @action(detail=True, methods=['post'])
     def create_account(self, request, pk=None):
         student = self.get_object()
         if student.user_id:
             return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
-        email = f'student{student.id}@school.local'
+        suffix = self._sanitize_admission(student.admission_no)
+        email = f'{suffix}@{student.school.subdomain}.clariva.ng'
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
         user = User.objects.create_user(
-            username=f'stu{student.id}',
+            username=self._generate_student_username(student),
             email=email,
             password=password,
             first_name=student.full_name.split(' ')[0],
@@ -106,10 +121,11 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         students = Student.objects.filter(class_group_id=class_id, school=request.user.school, user__isnull=True)
         created = []
         for student in students:
-            email = f'student{student.id}@school.local'
+            suffix = self._sanitize_admission(student.admission_no)
+            email = f'{suffix}@{student.school.subdomain}.clariva.ng'
             password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
             user = User.objects.create_user(
-                username=f'stu{student.id}',
+                username=self._generate_student_username(student),
                 email=email,
                 password=password,
                 first_name=student.full_name.split(' ')[0],
