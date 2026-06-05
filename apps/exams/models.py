@@ -60,6 +60,7 @@ class Question(BaseUUIDModel):
     topic = models.CharField(max_length=255, null=True, blank=True)
     difficulty = models.CharField(max_length=10, default='medium')
     mark = models.IntegerField(default=1)
+    order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
 class TimeTable(BaseUUIDModel):

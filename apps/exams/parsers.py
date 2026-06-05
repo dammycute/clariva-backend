@@ -248,6 +248,9 @@ def _parse_single_question(qlines):
                 f'MCQ answer must be one of {", ".join(expected)}. '
                 f'Got: {correct_answer} for question "{body[:60]}..."'
             )
+        # Resolve MCQ letter to option text
+        idx = ord(correct_answer.upper()) - ord('A')
+        correct_answer = options[idx]
 
     return {
         'body': body,

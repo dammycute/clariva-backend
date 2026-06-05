@@ -89,7 +89,7 @@ class ParseQuestionDocxTest(TestCase):
         self.assertEqual(q['body'], 'What is the capital of Nigeria?')
         self.assertEqual(q['question_type'], 'mcq')
         self.assertEqual(q['options'], ['Lagos', 'Abuja', 'Port Harcourt', 'Kano'])
-        self.assertEqual(q['correct_answer'], 'B')
+        self.assertEqual(q['correct_answer'], 'Abuja')
         self.assertEqual(q['difficulty'], 'easy')
         self.assertEqual(q['mark'], 2)
         self.assertEqual(q['topic'], 'Geography')
@@ -478,7 +478,7 @@ class CBTStartSubmitTest(TestCase):
         session_id = start_resp.json()['session_id']
 
         answers = {
-            str(self.q1.id): 'B',
+            str(self.q1.id): '4',  # option text matching correct_answer 'B' → resolved to '4'
             str(self.q2.id): 'False',
             str(self.q3.id): 'paris',  # lowercase should still match
         }
@@ -498,7 +498,7 @@ class CBTStartSubmitTest(TestCase):
         session_id = start_resp.json()['session_id']
 
         answers = {
-            str(self.q1.id): 'A',  # wrong
+            str(self.q1.id): '3',  # wrong (option text, correct is '4')
             str(self.q2.id): 'True',  # wrong
             str(self.q3.id): 'London',  # wrong
         }

@@ -4,7 +4,7 @@ import hashlib
 import zipfile
 from xml.etree import ElementTree
 from datetime import timedelta
-from rest_framework import serializers, viewsets, status
+from rest_framework import serializers, viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -21,6 +21,17 @@ from .models import (
 from .parsers import parse_question_docx
 
 W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+
+STAFF_ROLES = {'school_admin', 'principal', 'teacher', 'super_admin'}
+
+class IsStaffOrReadOnly(permissions.IsAuthenticated):
+    """Allow full access to staff roles; students/parents get read-only."""
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return True
+        return getattr(request.user, 'role', None) in STAFF_ROLES
 
 
 # ─── Subjects ────────────────────────────────────────────────────
@@ -412,6 +423,13 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Exam.objects.all()
     serializer_class = ExamSerializer
 
+    def get_permissions(self):
+        write_actions = {'create', 'update', 'partial_update', 'destroy',
+                         'upload_questions', 'question_template'}
+        if self.action in write_actions:
+            return [IsStaffOrReadOnly()]
+        return [permissions.IsAuthenticated()]
+
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
         exam = self.get_object()
@@ -419,6 +437,18 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         if exam.status not in ('published', 'ongoing'):
             return Response(
                 {'error': 'Exam is not available. Status must be published or ongoing.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        now = timezone.now()
+        if exam.start_time and now < exam.start_time:
+            return Response(
+                {'error': f'This exam has not started yet. It opens at {exam.start_time.strftime("%d %b %Y %H:%M")}.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if exam.end_time and now > exam.end_time:
+            return Response(
+                {'error': 'The exam window has closed.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -456,8 +486,12 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                 session.question_order = q_ids
                 session.save()
 
-        # Build time remaining
-        time_remaining = exam.duration_mins * 60
+        # Build time remaining (elapsed-aware for resumed sessions)
+        if session.started_at:
+            elapsed = int((timezone.now() - session.started_at).total_seconds())
+            time_remaining = max(0, exam.duration_mins * 60 - elapsed)
+        else:
+            time_remaining = exam.duration_mins * 60
 
         # Return questions without correct_answer
         questions_qs = Question.objects.filter(exam=exam)
@@ -535,6 +569,43 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             })
 
         return Response({'questions': question_data})
+
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, pk=None):
+        """Clone an exam and all its questions into a new draft."""
+        original = self.get_object()
+        questions = Question.objects.filter(exam=original)
+
+        new_exam = Exam.objects.create(
+            school=original.school,
+            title=f'Copy of {original.title}',
+            subject=original.subject,
+            class_group=original.class_group,
+            duration_mins=original.duration_mins,
+            pass_mark=original.pass_mark,
+            instructions=original.instructions,
+            shuffle_questions=original.shuffle_questions,
+            shuffle_options=original.shuffle_options,
+            time_limit_enforced=original.time_limit_enforced,
+            status='draft',
+        )
+
+        for q in questions:
+            Question.objects.create(
+                school=original.school,
+                exam=new_exam,
+                body=q.body,
+                image_url=q.image_url,
+                question_type=q.question_type,
+                options=q.options,
+                correct_answer=q.correct_answer,
+                topic=q.topic,
+                difficulty=q.difficulty,
+                mark=q.mark,
+            )
+
+        serializer = self.get_serializer(new_exam)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'],
             parser_classes=[MultiPartParser, FormParser])
@@ -658,7 +729,7 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             ('1. The header block (EXAM, SUBJECT, CLASS, DURATION, PASS_MARK, INSTRUCTIONS) is optional.', False),
             ('2. Separate questions using --- (three dashes) on their own line.', False),
             ('3. Each question must start with Q1., Q2., Q3., etc.', False),
-            ('4. For MCQ: list options as A., B., C., D. and provide ANSWER: with the letter.', False),
+                ('4. For MCQ: list options as A., B., C., D. and set ANSWER: to the letter (A/B/C/D) — it will be resolved to the option text automatically.', False),
             ('5. For True/False: set ANSWER: True or ANSWER: False.', False),
             ('6. For Short Answer: any ANSWER: value that is not True/False.', False),
             ('7. DIFFICULTY: easy, medium, or hard (defaults to medium).', False),
@@ -683,8 +754,13 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 
 class QuestionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = Question.objects.all()
+    queryset = Question.objects.all().order_by('order', 'created_at')
     serializer_class = QuestionSerializer
+
+    def get_permissions(self):
+        if self.action in {'create', 'update', 'partial_update', 'destroy'}:
+            return [IsStaffOrReadOnly()]
+        return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -712,14 +788,19 @@ class QuestionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
 
 class ExamSessionSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+
     class Meta:
         model = ExamSession
         fields = '__all__'
         read_only_fields = ('school', 'score', 'total_marks', 'passed', 'started_at', 'late_submission')
 
+    def get_student_name(self, obj):
+        return obj.student.full_name if obj.student else None
+
 
 class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = ExamSession.objects.all()
+    queryset = ExamSession.objects.select_related('student').all()
     serializer_class = ExamSessionSerializer
 
     def get_queryset(self):
@@ -729,6 +810,10 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             student = user.student_set.first()
             if student:
                 qs = qs.filter(student=student)
+        else:
+            exam_id = self.request.query_params.get('exam_id')
+            if exam_id:
+                qs = qs.filter(exam_id=exam_id)
         return qs
 
     def create(self, request, *args, **kwargs):
@@ -771,12 +856,14 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             user_answer = answers.get(str(q.id))
             if user_answer is None:
                 continue
-            if q.question_type in ('mcq', 'true_false'):
-                if str(user_answer).strip() == str(q.correct_answer).strip():
-                    score += q.mark
-            else:
-                if str(user_answer).strip().lower() == str(q.correct_answer).strip().lower():
-                    score += q.mark
+            user_ans = str(user_answer).strip().lower()
+            correct = str(q.correct_answer).strip().lower()
+            if q.question_type == 'mcq' and q.options and correct in ('a', 'b', 'c', 'd'):
+                idx = ord(correct) - ord('a')
+                if 0 <= idx < len(q.options):
+                    correct = q.options[idx].lower()
+            if user_ans == correct:
+                score += q.mark
 
         total_marks = sum(q.mark for q in questions)
         passed = (score / total_marks * 100) >= exam.pass_mark if total_marks > 0 else False
@@ -789,6 +876,7 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         session.status = 'submitted'
         session.late_submission = late
         session.answers = answers
+        session.tab_switches = int(request.data.get('tab_switches', 0) or 0)
         session.save()
 
         return Response({
