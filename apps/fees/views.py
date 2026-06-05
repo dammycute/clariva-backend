@@ -1,4 +1,4 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, permissions
 from rest_framework.response import Response
 from django.db import transaction
 from apps.mixins import SchoolFilterMixin
@@ -6,14 +6,29 @@ from .models import FeeItem, FeeInvoice
 from .serializers import FeeItemSerializer, FeeInvoiceSerializer
 
 
+FINANCE_ROLES = {'school_admin', 'bursary', 'super_admin'}
+
+
+class FeeRolePermission(permissions.IsAuthenticated):
+    """Allow read to all authenticated; write restricted to finance roles."""
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+        if request.method in ('GET', 'HEAD', 'OPTIONS'):
+            return True
+        return getattr(request.user, 'role', None) in FINANCE_ROLES
+
+
 class FeeItemViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = FeeItem.objects.all()
     serializer_class = FeeItemSerializer
+    permission_classes = (FeeRolePermission,)
 
 
 class FeeInvoiceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = FeeInvoice.objects.select_related('student', 'fee_item').prefetch_related('items__fee_item').all()
     serializer_class = FeeInvoiceSerializer
+    permission_classes = (FeeRolePermission,)
 
     def get_queryset(self):
         qs = super().get_queryset()

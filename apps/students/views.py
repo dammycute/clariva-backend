@@ -147,3 +147,49 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         student.user.set_password(password)
         student.user.save()
         return Response({'email': student.user.email, 'password': password})
+
+    @action(detail=True, methods=['get'])
+    def timeline(self, request, pk=None):
+        student = self.get_object()
+        from apps.attendance.models import Attendance
+        from apps.exams.models import ExamSession
+        from apps.fees.models import FeeInvoice
+        from apps.grades.models import Grade
+
+        events = []
+
+        for att in Attendance.objects.filter(student=student).order_by('-date')[:20]:
+            events.append({
+                'type': 'attendance',
+                'date': att.date.isoformat() if att.date else None,
+                'title': f'Attendance: {att.status}',
+                'description': f'Marked as {att.status} on {att.date}',
+            })
+
+        for ses in ExamSession.objects.filter(student=student).select_related('exam').order_by('-submitted_at')[:20]:
+            if ses.submitted_at:
+                events.append({
+                    'type': 'exam',
+                    'date': ses.submitted_at.isoformat(),
+                    'title': f'Exam: {ses.exam.title}',
+                    'description': f'Score: {ses.score}/{ses.total_marks}',
+                })
+
+        for inv in FeeInvoice.objects.filter(student=student).order_by('-created_at')[:20]:
+            events.append({
+                'type': 'fee',
+                'date': inv.created_at.isoformat(),
+                'title': f'Fee: {inv.fee_item.name if inv.fee_item else "Invoice"}',
+                'description': f'₦{inv.amount_paid:,.2f} paid of ₦{inv.amount_due:,.2f}',
+            })
+
+        for g in Grade.objects.filter(student=student).select_related('subject').order_by('-created_at')[:20]:
+            events.append({
+                'type': 'grade',
+                'date': g.created_at.isoformat() if g.created_at else None,
+                'title': f'Grade: {g.subject.name if g.subject else "Subject"}',
+                'description': f'Total: {g.total} ({g.grade})',
+            })
+
+        events.sort(key=lambda e: e['date'] or '', reverse=True)
+        return Response(events[:50])

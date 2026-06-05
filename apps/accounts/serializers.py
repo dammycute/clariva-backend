@@ -11,7 +11,18 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     def validate(self, attrs):
         attrs['username'] = attrs.pop('email')
-        return super().validate(attrs)
+        data = super().validate(attrs)
+        user = self.user
+        data['role'] = user.role
+        data['school_id'] = str(user.school_id) if user.school_id else None
+        return data
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token['role'] = user.role
+        token['school_id'] = str(user.school_id) if user.school_id else None
+        return token
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)

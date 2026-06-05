@@ -10,6 +10,7 @@ ROLE_CHOICES = [
     ('school_admin', 'School Admin'),
     ('principal', 'Principal'),
     ('teacher', 'Teacher'),
+    ('bursary', 'Bursary'),
     ('student', 'Student'),
     ('parent', 'Parent'),
 ]

@@ -22,7 +22,7 @@ from .parsers import parse_question_docx
 
 W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 
-STAFF_ROLES = {'school_admin', 'principal', 'teacher', 'super_admin'}
+STAFF_ROLES = {'school_admin', 'principal', 'teacher', 'bursary', 'super_admin'}
 
 class IsStaffOrReadOnly(permissions.IsAuthenticated):
     """Allow full access to staff roles; students/parents get read-only."""

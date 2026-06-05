@@ -121,6 +121,20 @@ def portal_lookup(request):
     late_count = attendance_records.filter(status='late').count()
     attendance_rate = round(present_count / total_att * 100, 1) if total_att > 0 else None
 
+    # Recent notifications
+    from apps.comms.models import Notification
+    recent_notifs = []
+    if student.user_id:
+        notifs = Notification.objects.filter(recipient=student.user)[:5]
+        recent_notifs = [{
+            'id': str(n.id),
+            'type': n.notif_type,
+            'title': n.title,
+            'message': n.message,
+            'read': n.read,
+            'created_at': n.created_at.isoformat(),
+        } for n in notifs]
+
     return Response({
         'student_id': student.id,
         'full_name': student.full_name,
@@ -128,6 +142,7 @@ def portal_lookup(request):
         'class_name': student.class_group.name if student.class_group else None,
         'status': student.status,
         'school_name': student.school.name if student.school else None,
+        'recent_notifications': recent_notifs,
         'fee_summary': {
             'total_due': total_due,
             'total_paid': total_paid,
@@ -263,6 +278,20 @@ def portal_children(request):
         present_count = Attendance.objects.filter(student=student, status='present').count()
         attendance_rate = round(present_count / total_attendance * 100, 1) if total_attendance > 0 else None
 
+        # Recent notifications
+        from apps.comms.models import Notification
+        recent_notifs = []
+        if student.user_id:
+            notifs = Notification.objects.filter(recipient=student.user)[:5]
+            recent_notifs = [{
+                'id': str(n.id),
+                'type': n.notif_type,
+                'title': n.title,
+                'message': n.message,
+                'read': n.read,
+                'created_at': n.created_at.isoformat(),
+            } for n in notifs]
+
         result.append({
             'id': student.id,
             'full_name': student.full_name,
@@ -270,6 +299,7 @@ def portal_children(request):
             'class_name': student.class_group.name if student.class_group else None,
             'status': student.status,
             'gender': student.gender,
+            'recent_notifications': recent_notifs,
             'fee_summary': {
                 'total_due': total_due,
                 'total_paid': total_paid,

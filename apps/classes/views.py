@@ -4,7 +4,7 @@ from .models import Class
 from .serializers import ClassSerializer
 
 class ClassViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = Class.objects.all()
+    queryset = Class.objects.select_related('form_teacher').all()
     serializer_class = ClassSerializer
 
     def get_queryset(self):

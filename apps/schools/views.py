@@ -8,12 +8,22 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import School, GradingConfig, DEFAULT_GRADE_BOUNDARIES
 from .serializers import SchoolSerializer, GradingConfigSerializer
+from .analytics import get_summary
 
 
 class SchoolViewSet(viewsets.ModelViewSet):
     queryset = School.objects.all()
     serializer_class = SchoolSerializer
     permission_classes = (permissions.IsAuthenticated,)
+
+    @action(detail=True, methods=['get'])
+    def analytics(self, request, pk=None):
+        school = self.get_object()
+        data = get_summary(school.id)
+        data['school_name'] = school.name
+        data['current_term'] = school.current_term
+        data['current_academic_year'] = school.current_academic_year
+        return Response(data)
 
     @action(detail=True, methods=['get', 'put', 'patch'])
     def grading(self, request, pk=None):

@@ -48,9 +48,14 @@ class StudentLoginView(generics.GenericAPIView):
             return Response({'detail': 'Incorrect password'}, status=status.HTTP_400_BAD_REQUEST)
 
         refresh = RefreshToken.for_user(student.user)
+        refresh['role'] = 'student'
+        refresh['school_id'] = str(student.school_id) if student.school_id else None
+        refresh.access_token['role'] = 'student'
+        refresh.access_token['school_id'] = str(student.school_id) if student.school_id else None
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'role': 'student',
             'student_name': student.full_name,
+            'school_id': str(student.school_id) if student.school_id else None,
         })
