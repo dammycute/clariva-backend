@@ -65,7 +65,7 @@ class FeeInvoiceSerializer(serializers.ModelSerializer):
         return attrs
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
     def get_fee_name(self, obj):
         return obj.fee_item.name if obj.fee_item else None

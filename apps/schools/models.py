@@ -10,22 +10,34 @@ DEFAULT_GRADE_BOUNDARIES = [
     {"name": "F9", "min_pct": 0},
 ]
 
+PREDEFINED_COMPONENTS = [
+    {"key": "ca1", "default_label": "CA 1", "default_max": 30},
+    {"key": "ca2", "default_label": "CA 2", "default_max": 30},
+    {"key": "assignment", "default_label": "Assignment", "default_max": 40},
+    {"key": "exam", "default_label": "Exam", "default_max": 100},
+]
+
+DEFAULT_COMPONENTS = [
+    {"key": "ca1", "label": "CA 1", "max": 30, "enabled": True},
+    {"key": "ca2", "label": "CA 2", "max": 30, "enabled": True},
+    {"key": "assignment", "label": "Assignment", "max": 40, "enabled": True},
+    {"key": "exam", "label": "Exam", "max": 100, "enabled": True},
+]
+
 
 class GradingConfig(BaseUUIDModel):
     school = models.OneToOneField('schools.School', on_delete=models.CASCADE, related_name='grading_config')
-    max_ca1 = models.IntegerField(default=30, validators=[MinValueValidator(0)])
-    max_ca2 = models.IntegerField(default=30, validators=[MinValueValidator(0)])
-    max_assignment = models.IntegerField(default=40, validators=[MinValueValidator(0)])
-    max_exam = models.IntegerField(default=100, validators=[MinValueValidator(0)])
+    components = models.JSONField(default=list, help_text='[{"key":"ca1","label":"CA 1","max":30,"enabled":true},...]')
     grade_boundaries = models.JSONField(default=list, help_text='[{"name":"A1","min_pct":75},...]')
 
     @property
-    def total_ca(self):
-        return self.max_ca1 + self.max_ca2 + self.max_assignment
+    def total_possible(self):
+        return sum(c['max'] for c in self.components if c.get('enabled', True))
 
     @property
-    def total_possible(self):
-        return self.total_ca + self.max_exam
+    def total_ca(self):
+        return sum(c['max'] for c in self.components
+                    if c.get('enabled', True) and c.get('key') != 'exam')
 
     def get_grade(self, score: float) -> str:
         if not self.grade_boundaries or self.total_possible == 0:

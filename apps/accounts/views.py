@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.hashers import check_password
 from .serializers import RegisterSerializer, UserSerializer
-from apps.students.models import Student
+from .models import User
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
@@ -34,28 +34,22 @@ class StudentLoginView(generics.GenericAPIView):
             return Response({'detail': 'Password is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            student = Student.objects.get(admission_no__iexact=student_id)
-        except Student.DoesNotExist:
+            user = User.objects.get(admission_no__iexact=student_id, role='student')
+        except User.DoesNotExist:
             return Response({'detail': 'Student ID not found'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not student.user:
-            return Response(
-                {'detail': 'No login account exists for this student. Contact your school admin.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not check_password(password, student.user.password):
+        if not check_password(password, user.password):
             return Response({'detail': 'Incorrect password'}, status=status.HTTP_400_BAD_REQUEST)
 
-        refresh = RefreshToken.for_user(student.user)
+        refresh = RefreshToken.for_user(user)
         refresh['role'] = 'student'
-        refresh['school_id'] = str(student.school_id) if student.school_id else None
+        refresh['school_id'] = str(user.school_id) if user.school_id else None
         refresh.access_token['role'] = 'student'
-        refresh.access_token['school_id'] = str(student.school_id) if student.school_id else None
+        refresh.access_token['school_id'] = str(user.school_id) if user.school_id else None
         return Response({
             'access': str(refresh.access_token),
             'refresh': str(refresh),
             'role': 'student',
-            'student_name': student.full_name,
-            'school_id': str(student.school_id) if student.school_id else None,
+            'student_name': user.get_full_name(),
+            'school_id': str(user.school_id) if user.school_id else None,
         })

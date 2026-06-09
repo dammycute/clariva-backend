@@ -19,7 +19,7 @@ class FeeItem(BaseUUIDModel):
 
 class FeeInvoice(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
-    student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
+    student = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
     fee_item = models.ForeignKey(FeeItem, null=True, blank=True, on_delete=models.SET_NULL)
     amount_due = models.DecimalField(max_digits=12, decimal_places=2)
     amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -31,7 +31,7 @@ class FeeInvoice(BaseUUIDModel):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f'{self.student.full_name} — Invoice #{self.pk}'
+        return f'{self.student.get_full_name()} — Invoice #{self.pk}'
 
 class FeeInvoiceItem(BaseUUIDModel):
     invoice = models.ForeignKey(FeeInvoice, on_delete=models.CASCADE, related_name='items')

@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import School, GradingConfig, DEFAULT_GRADE_BOUNDARIES
+from .models import School, GradingConfig, DEFAULT_GRADE_BOUNDARIES, DEFAULT_COMPONENTS
 from .serializers import SchoolSerializer, GradingConfigSerializer
 from .analytics import get_summary
 
@@ -28,7 +28,10 @@ class SchoolViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get', 'put', 'patch'])
     def grading(self, request, pk=None):
         school = self.get_object()
-        config, _ = GradingConfig.objects.get_or_create(school=school, defaults={'grade_boundaries': DEFAULT_GRADE_BOUNDARIES})
+        config, _ = GradingConfig.objects.get_or_create(
+            school=school,
+            defaults={'grade_boundaries': DEFAULT_GRADE_BOUNDARIES, 'components': DEFAULT_COMPONENTS},
+        )
 
         if request.method == 'GET':
             return Response(GradingConfigSerializer(config).data)
@@ -44,7 +47,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if not school_id:
             return Response({'error': 'No school assigned'}, status=status.HTTP_400_BAD_REQUEST)
 
-        from apps.students.models import Student
+        from apps.accounts.models import User
         from apps.classes.models import Class
         from apps.staff.models import Staff
         from apps.fees.models import FeeItem, FeeInvoice, FeeInvoiceItem
@@ -54,7 +57,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
         from apps.comms.models import Announcement
 
         models_to_backup = {
-            'students': (Student,),
+            'students': (User,),
             'classes': (Class,),
             'staff': (Staff,),
             'fee_items': (FeeItem,),

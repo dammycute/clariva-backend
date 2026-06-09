@@ -3,7 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Sum, Count, Q
 from ..fees.models import FeeInvoice, FeeItem
-from ..students.models import Student
+from apps.accounts.models import User
 
 
 FINANCE_ROLES = {'school_admin', 'bursary', 'super_admin'}
@@ -20,7 +20,7 @@ def bursary_summary(request):
         return Response({'error': 'No school assigned'}, status=400)
 
     invoices = FeeInvoice.objects.filter(student__school_id=school_id)
-    students = Student.objects.filter(school_id=school_id, status='active')
+    students = User.objects.filter(school_id=school_id, role='student', student_status='active')
 
     total_due = invoices.aggregate(d=Sum('amount_due'))['d'] or 0
     total_paid = invoices.aggregate(p=Sum('amount_paid'))['p'] or 0

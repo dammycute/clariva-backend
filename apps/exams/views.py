@@ -14,6 +14,7 @@ from django.http import FileResponse
 from django.utils import timezone
 from decimal import Decimal
 from apps.mixins import SchoolFilterMixin
+from apps.accounts.models import User
 from .models import (
     Subject, StudentSubject, TimeTable, TimeSlot, ReportCard,
     Exam, Question, ExamSession,
@@ -39,17 +40,21 @@ class IsStaffOrReadOnly(permissions.IsAuthenticated):
 class SubjectSerializer(serializers.ModelSerializer):
     class_name = serializers.SerializerMethodField()
     teacher_name = serializers.SerializerMethodField()
+    grading_mode_label = serializers.SerializerMethodField()
 
     class Meta:
         model = Subject
         fields = '__all__'
         read_only_fields = ('school',)
 
+    def get_grading_mode_label(self, obj):
+        return dict(Subject._meta.get_field('grading_mode').choices).get(obj.grading_mode, obj.grading_mode)
+
     def get_class_name(self, obj):
         return obj.year_group or 'All'
 
     def get_teacher_name(self, obj):
-        return obj.teacher.full_name if obj.teacher else None
+        return obj.teacher.get_full_name() if obj.teacher else None
 
 
 class SubjectViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
@@ -63,9 +68,8 @@ class SubjectViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         teacher_id = self.request.query_params.get('teacher_id')
 
         if teacher_id == 'me' and user.role == 'teacher':
-            staff = user.staff_set.first()
-            if staff:
-                qs = qs.filter(teacher=staff)
+            if user.staff_profile:
+                qs = qs.filter(teacher=user)
         elif teacher_id:
             qs = qs.filter(teacher_id=teacher_id)
 
@@ -86,7 +90,7 @@ class StudentSubjectSerializer(serializers.ModelSerializer):
         read_only_fields = ('school',)
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
     def get_subject_name(self, obj):
         return obj.subject.name if obj.subject else None
@@ -122,7 +126,7 @@ class TimeSlotSerializer(serializers.ModelSerializer):
         return obj.subject.name if obj.subject else None
 
     def get_teacher_name(self, obj):
-        return obj.teacher.full_name if obj.teacher else None
+        return obj.teacher.get_full_name() if obj.teacher else None
 
 
 class TimeTableSerializer(serializers.ModelSerializer):
@@ -219,7 +223,7 @@ class ReportCardSerializer(serializers.ModelSerializer):
         read_only_fields = ('school',)
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
     def get_class_name(self, obj):
         return obj.student.class_group.name if obj.student and obj.student.class_group else None
@@ -231,6 +235,12 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
+
+        # Guardian/student only see released report cards
+        if user.role in ('parent', 'guardian', 'student'):
+            qs = qs.filter(is_released=True)
+
         student_id = self.request.query_params.get('student_id')
         class_id = self.request.query_params.get('class_id')
         term = self.request.query_params.get('term')
@@ -245,11 +255,28 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(academic_year=academic_year)
         return qs
 
+    @action(detail=True, methods=['post'])
+    def release(self, request, pk=None):
+        card = self.get_object()
+        card.is_released = True
+        card.released_at = timezone.now()
+        card.released_by = staff
+        card.save()
+        return Response({'status': 'released'})
+
+    @action(detail=True, methods=['post'])
+    def unrelease(self, request, pk=None):
+        card = self.get_object()
+        card.is_released = False
+        card.released_at = None
+        card.released_by = None
+        card.save()
+        return Response({'status': 'unreleased'})
+
     @action(detail=False, methods=['post'])
     def generate(self, request):
         """Generate report cards for a class + term. Creates or updates ReportCard records."""
         from apps.grades.models import Grade
-        from apps.students.models import Student
 
         class_id = request.data.get('class_id')
         term = request.data.get('term')
@@ -258,7 +285,7 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
         if not all([class_id, term, academic_year]):
             return Response({'error': 'class_id, term, and academic_year required'}, status=400)
 
-        students = Student.objects.filter(class_group_id=class_id, status='active', school=request.user.school)
+        students = User.objects.filter(role='student', class_group_id=class_id, student_status='active', school=request.user.school)
         if not students:
             return Response({'error': 'No active students in this class'}, status=400)
 
@@ -280,7 +307,7 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
         from apps.schools.models import GradingConfig
         try:
             gc = GradingConfig.objects.get(school=request.user.school)
-            max_per_subject = gc.max_ca1 + gc.max_ca2 + gc.max_assignment + gc.max_exam
+            max_per_subject = gc.total_possible
         except GradingConfig.DoesNotExist:
             max_per_subject = 200
 
@@ -307,7 +334,7 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
             ).select_related('subject')
 
             if not grades:
-                skipped.append(student.full_name)
+                skipped.append(student.get_full_name())
                 continue
 
             grade_list = []
@@ -317,12 +344,10 @@ class ReportCardViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
                 if g.total is not None:
                     total += g.total
                     count += 1
+                scores = g.scores or {}
                 grade_list.append({
                     'subject': g.subject.name if g.subject else 'Unknown',
-                    'ca1': float(g.ca1) if g.ca1 else None,
-                    'ca2': float(g.ca2) if g.ca2 else None,
-                    'assignment': float(g.assignment) if g.assignment else None,
-                    'exam': float(g.exam) if g.exam else None,
+                    'scores': scores,
                     'total': float(g.total) if g.total else None,
                     'grade': g.grade,
                 })
@@ -423,6 +448,14 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Exam.objects.all()
     serializer_class = ExamSerializer
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'teacher':
+            subject_ids = Subject.objects.filter(teacher=user).values_list('id', flat=True)
+            qs = qs.filter(subject_id__in=subject_ids)
+        return qs
+
     def get_permissions(self):
         write_actions = {'create', 'update', 'partial_update', 'destroy',
                          'upload_questions', 'question_template'}
@@ -452,15 +485,15 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        student = request.user.student_set.first()
-        if not student:
+        if request.user.role != 'student':
             return Response(
                 {'error': 'Only students can start an exam.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        student = request.user
+
         # Check for existing submitted session
-        existing = ExamSession.objects.filter(exam=exam, student=student).first()
         if existing and existing.status == 'submitted':
             return Response(
                 {'error': 'You have already submitted this exam.'},
@@ -532,9 +565,9 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def questions(self, request, pk=None):
         exam = self.get_object()
-        student = request.user.student_set.first()
-        if not student:
+        if request.user.role != 'student':
             return Response({'error': 'Only students can access exam questions.'}, status=status.HTTP_403_FORBIDDEN)
+        student = request.user
 
         session = ExamSession.objects.filter(exam=exam, student=student, status='active').first()
         if not session:
@@ -796,7 +829,7 @@ class ExamSessionSerializer(serializers.ModelSerializer):
         read_only_fields = ('school', 'score', 'total_marks', 'passed', 'started_at', 'late_submission')
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
 
 class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
@@ -807,9 +840,7 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         qs = super().get_queryset()
         user = self.request.user
         if user.role == 'student':
-            student = user.student_set.first()
-            if student:
-                qs = qs.filter(student=student)
+            qs = qs.filter(student=user)
         else:
             exam_id = self.request.query_params.get('exam_id')
             if exam_id:
@@ -825,8 +856,7 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def submit(self, request, pk=None):
         session = self.get_object()
-        student = request.user.student_set.first()
-        if not student or session.student != student:
+        if request.user.role != 'student' or session.student != request.user:
             return Response(
                 {'error': 'This session does not belong to you.'},
                 status=status.HTTP_403_FORBIDDEN,
@@ -867,7 +897,7 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
         total_marks = sum(q.mark for q in questions)
         passed = (score / total_marks * 100) >= exam.pass_mark if total_marks > 0 else False
-        percentage = round((score / total_marks * 100), 2) if total_marks > 0 else 0
+        percentage = round((score / total_marks * 100)) if total_marks > 0 else 0
 
         session.score = score
         session.total_marks = total_marks
@@ -878,6 +908,32 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         session.answers = answers
         session.tab_switches = int(request.data.get('tab_switches', 0) or 0)
         session.save()
+
+        # Auto-populate Grade from CBT score
+        from apps.grades.models import Grade
+        if exam.component and exam.subject:
+            scaling_factor = 30
+            if exam.component == 'exam':
+                scaling_factor = 100
+            if total_marks > 0:
+                scaled_score = round((score / total_marks) * scaling_factor)
+            else:
+                scaled_score = 0
+
+            scores = {}
+            if exam.component:
+                scores[exam.component] = scaled_score
+            grade_obj, _ = Grade.objects.get_or_create(
+                school=exam.school,
+                student=student,
+                subject=exam.subject,
+                term=exam.term or '',
+                academic_year=exam.academic_year or '',
+                defaults={'scores': scores},
+            )
+            if grade_obj.results_status != 'approved':
+                grade_obj.scores.update(scores)
+                grade_obj.save()
 
         return Response({
             'score': float(score),

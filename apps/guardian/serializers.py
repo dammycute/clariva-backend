@@ -1,13 +1,5 @@
 from rest_framework import serializers
-from .models import GuardianAccount, GuardianStudent
-
-
-class GuardianAccountSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = GuardianAccount
-        fields = ('id', 'school', 'phone', 'pin', 'created_at')
-        read_only_fields = ('school', 'created_at')
-        extra_kwargs = {'pin': {'write_only': True}}
+from .models import GuardianStudent
 
 
 class GuardianStudentSerializer(serializers.ModelSerializer):
@@ -20,7 +12,7 @@ class GuardianStudentSerializer(serializers.ModelSerializer):
         read_only_fields = ('created_at',)
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
     def get_admission_no(self, obj):
         return obj.student.admission_no if obj.student else None

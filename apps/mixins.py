@@ -1,7 +1,13 @@
 from django.db import models
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.pagination import PageNumberPagination
 from apps.audit.models import ActivityLog
 from apps.schools.models import School
+
+
+class CustomPagination(PageNumberPagination):
+    page_size_query_param = 'page_size'
+    max_page_size = 10000
 
 
 class SchoolFilterMixin:

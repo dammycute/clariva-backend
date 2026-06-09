@@ -1,42 +1,43 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 from apps.mixins import SchoolFilterMixin
-from apps.accounts.models import User
-from .models import Student
+from apps.accounts.models import User, StudentAccessCode
 from .serializers import StudentSerializer
 import secrets
 import string
 
 
 class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = Student.objects.select_related('class_group', 'user').all()
+    queryset = User.objects.filter(role='student').select_related('class_group').all()
     serializer_class = StudentSerializer
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().filter(role='student')
         user = self.request.user
 
         # Student self-access
         if user.role == 'student':
-            return qs.filter(user=user)
+            return qs.filter(id=user.id)
 
         # Teacher scoping
         if user.role == 'teacher':
-            staff = user.staff_set.first()
+            staff = user.staff_profile
             if staff:
                 teacher_classes = staff.class_set.values_list('id', flat=True)
                 qs = qs.filter(class_group_id__in=teacher_classes)
 
-        status = self.request.query_params.get('status')
+        student_status = self.request.query_params.get('status')
         class_id = self.request.query_params.get('class_id')
         search = self.request.query_params.get('search')
-        if status:
-            qs = qs.filter(status=status)
+        if student_status:
+            qs = qs.filter(student_status=student_status)
         if class_id:
             qs = qs.filter(class_group_id=class_id)
         if search:
-            qs = qs.filter(full_name__icontains=search) | qs.filter(admission_no__icontains=search)
+            qs = qs.filter(first_name__icontains=search) | qs.filter(
+                last_name__icontains=search) | qs.filter(admission_no__icontains=search)
         return qs
 
     @action(detail=False, methods=['post'])
@@ -46,23 +47,32 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         class_id = request.data.get('class_id')
         reader = csv.DictReader(io.StringIO(csv_data))
         created, errors = 0, []
+        school = getattr(request.user, 'school', None)
         for i, row in enumerate(reader, start=2):
             name = row.get('full_name', '').strip()
             if not name:
                 errors.append(f'Row {i}: missing full_name')
                 continue
+            name_parts = name.split(' ', 1)
+            first_name = name_parts[0]
+            last_name = name_parts[1] if len(name_parts) > 1 else ''
             try:
-                seq = Student.objects.filter(school=request.user.school).count() + 1
-                Student.objects.create(
-                    school=request.user.school,
-                    admission_no=row.get('admission_no', '') or f'CLR/{request.user.school_id}/{seq:05d}',
-                    full_name=name,
+                seq = User.objects.filter(school=school, role='student').count() + 1
+                admission_no = row.get('admission_no', '') or f'CLR/{request.user.school_id}/{seq:05d}'
+                username = f'student.{seq}'
+                User.objects.create(
+                    school=school,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                    admission_no=admission_no,
                     gender=row.get('gender', '').strip() or None,
                     class_group_id=class_id or None,
                     guardian_name=row.get('guardian_name', '').strip() or None,
                     guardian_phone=row.get('guardian_phone', '').strip() or None,
                     guardian_email=row.get('guardian_email', '').strip() or None,
-                    status='active',
+                    student_status='active',
+                    role='student',
                 )
                 created += 1
             except Exception as e:
@@ -75,16 +85,16 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         target_class_id = request.data.get('target_class_id')
         if not student_ids or not target_class_id:
             return Response({'error': 'student_ids and target_class_id are required'}, status=status.HTTP_400_BAD_REQUEST)
-        updated = Student.objects.filter(id__in=student_ids, school=request.user.school).update(class_group_id=target_class_id)
+        updated = User.objects.filter(
+            id__in=student_ids, school=request.user.school, role='student'
+        ).update(class_group_id=target_class_id)
         return Response({'promoted': updated})
 
     def _sanitize_admission(self, admission_no):
         return admission_no.replace('/', '-').replace(' ', '-').replace('.', '-').lower()
 
-    def _generate_student_username(self, student):
-        first_name = student.full_name.split()[0].lower()
-        suffix = self._sanitize_admission(student.admission_no)
-        base = f'{first_name}.{suffix}'
+    def _generate_student_username(self, admission_no, school):
+        base = f'student.{self._sanitize_admission(admission_no)}'
         username = base
         counter = 1
         while User.objects.filter(username=username).exists():
@@ -95,21 +105,14 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def create_account(self, request, pk=None):
         student = self.get_object()
-        if student.user_id:
+        if student.has_usable_password():
             return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
-        suffix = self._sanitize_admission(student.admission_no)
+        suffix = self._sanitize_admission(student.admission_no or student.id)
         email = f'{suffix}@{student.school.subdomain}.clariva.ng'
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-        user = User.objects.create_user(
-            username=self._generate_student_username(student),
-            email=email,
-            password=password,
-            first_name=student.full_name.split(' ')[0],
-            last_name=' '.join(student.full_name.split(' ')[1:]),
-            role='student',
-            school=student.school,
-        )
-        student.user = user
+        student.username = self._generate_student_username(student.admission_no or student.id, student.school)
+        student.email = email
+        student.set_password(password)
         student.save()
         return Response({'email': email, 'password': password}, status=status.HTTP_201_CREATED)
 
@@ -118,35 +121,31 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         class_id = request.data.get('class_id')
         if not class_id:
             return Response({'error': 'class_id required'}, status=status.HTTP_400_BAD_REQUEST)
-        students = Student.objects.filter(class_group_id=class_id, school=request.user.school, user__isnull=True)
+        students = User.objects.filter(
+            class_group_id=class_id, school=request.user.school, role='student',
+            password='',
+        )
         created = []
         for student in students:
-            suffix = self._sanitize_admission(student.admission_no)
+            suffix = self._sanitize_admission(student.admission_no or student.id)
             email = f'{suffix}@{student.school.subdomain}.clariva.ng'
             password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-            user = User.objects.create_user(
-                username=self._generate_student_username(student),
-                email=email,
-                password=password,
-                first_name=student.full_name.split(' ')[0],
-                last_name=' '.join(student.full_name.split(' ')[1:]),
-                role='student',
-                school=student.school,
-            )
-            student.user = user
+            student.username = self._generate_student_username(student.admission_no or student.id, student.school)
+            student.email = email
+            student.set_password(password)
             student.save()
-            created.append({'name': student.full_name, 'email': email, 'password': password})
+            created.append({'name': student.get_full_name(), 'email': email, 'password': password})
         return Response({'created': created})
 
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
         student = self.get_object()
-        if not student.user_id:
+        if not student.has_usable_password():
             return Response({'error': 'No account exists for this student'}, status=status.HTTP_400_BAD_REQUEST)
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-        student.user.set_password(password)
-        student.user.save()
-        return Response({'email': student.user.email, 'password': password})
+        student.set_password(password)
+        student.save()
+        return Response({'email': student.email, 'password': password})
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -193,3 +192,6 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
         events.sort(key=lambda e: e['date'] or '', reverse=True)
         return Response(events[:50])
+
+    def perform_create(self, serializer):
+        serializer.save(role='student')

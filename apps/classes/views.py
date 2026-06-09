@@ -13,9 +13,7 @@ class ClassViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         teacher_id = self.request.query_params.get('teacher_id')
 
         if teacher_id == 'me' and user.role == 'teacher':
-            staff = user.staff_set.first()
-            if staff:
-                qs = qs.filter(form_teacher=staff)
+            qs = qs.filter(form_teacher=user)
         elif teacher_id:
             qs = qs.filter(form_teacher_id=teacher_id)
         return qs

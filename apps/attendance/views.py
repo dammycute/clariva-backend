@@ -10,7 +10,7 @@ class AttendanceSerializer(serializers.ModelSerializer):
         read_only_fields = ('school',)
 
     def get_student_name(self, obj):
-        return obj.student.full_name if obj.student else None
+        return obj.student.get_full_name() if obj.student else None
 
 from apps.mixins import SchoolFilterMixin
 
@@ -24,13 +24,12 @@ class AttendanceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
         # Student self-access
         if user.role == 'student':
-            return qs.filter(student__user=user)
+            return qs.filter(student=user)
 
         # Teacher scoping
         if user.role == 'teacher':
-            staff = user.staff_set.first()
-            if staff:
-                teacher_classes = staff.class_set.values_list('id', flat=True)
+            teacher_classes = user.class_set.values_list('id', flat=True)
+            if teacher_classes:
                 qs = qs.filter(class_group_id__in=teacher_classes)
 
         class_id = self.request.query_params.get('class_id')

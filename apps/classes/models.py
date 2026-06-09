@@ -6,7 +6,7 @@ class Class(BaseUUIDModel):
     name = models.CharField(max_length=100)
     year_group = models.CharField(max_length=20, null=True, blank=True)
     arm = models.CharField(max_length=10, null=True, blank=True)
-    form_teacher = models.ForeignKey('staff.Staff', on_delete=models.SET_NULL, null=True, blank=True)
+    form_teacher = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True)
     academic_year = models.CharField(max_length=20, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

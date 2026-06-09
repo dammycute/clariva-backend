@@ -11,5 +11,5 @@ class ClassSerializer(serializers.ModelSerializer):
 
     def get_form_teacher_name(self, obj):
         if obj.form_teacher:
-            return obj.form_teacher.full_name
+            return obj.form_teacher.get_full_name()
         return None

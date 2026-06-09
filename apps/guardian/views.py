@@ -1,19 +1,13 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from django.contrib.auth.hashers import make_password, check_password
 from django.core.cache import cache
-from django.utils import timezone
-from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.students.models import Student, StudentAccessCode
-from apps.schools.models import School
-from .models import GuardianAccount, GuardianStudent
+from apps.accounts.models import User, StudentAccessCode
+from .models import GuardianStudent
 
 
 def _rate_limit_ip(key_prefix, max_requests=10, window=60):
-    """Simple IP-based rate limiter using Django cache."""
-    from django.http import HttpRequest
     def decorator(view_fn):
         def wrapper(request, *args, **kwargs):
             ip = request.META.get('REMOTE_ADDR', 'unknown')
@@ -34,20 +28,38 @@ def _rate_limit_ip(key_prefix, max_requests=10, window=60):
 @permission_classes([permissions.AllowAny])
 @_rate_limit_ip('portal_lookup')
 def portal_lookup(request):
+    admission_no = request.data.get('admission_no', '').strip()
     code = request.data.get('code', '').strip().upper()
-    if not code:
-        return Response({'error': 'Code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    try:
-        sac = StudentAccessCode.objects.select_related(
-            'student', 'student__school', 'student__class_group'
-        ).get(code=code)
-    except StudentAccessCode.DoesNotExist:
-        return Response({'error': 'Invalid code'}, status=status.HTTP_404_NOT_FOUND)
+    if code and not admission_no:
+        try:
+            sac = StudentAccessCode.objects.select_related(
+                'student', 'student__school', 'student__class_group'
+            ).get(code=code)
+        except StudentAccessCode.DoesNotExist:
+            return Response({'error': 'Invalid access code'}, status=status.HTTP_404_NOT_FOUND)
+        student = sac.student
+    else:
+        if not admission_no:
+            return Response({'error': 'Admission number is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not code:
+            return Response({'error': 'Access code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    student = sac.student
+        try:
+            student = User.objects.select_related(
+                'school', 'class_group'
+            ).get(admission_no__iexact=admission_no, role='student')
+        except User.DoesNotExist:
+            return Response({'error': 'Student not found with this admission number'}, status=status.HTTP_404_NOT_FOUND)
 
-    # Fee summary with breakdown
+        try:
+            sac = StudentAccessCode.objects.get(student=student)
+        except StudentAccessCode.DoesNotExist:
+            return Response({'error': 'No access code set for this student'}, status=status.HTTP_404_NOT_FOUND)
+
+        if sac.code != code:
+            return Response({'error': 'Invalid access code'}, status=status.HTTP_401_UNAUTHORIZED)
+
     from apps.fees.models import FeeInvoice, FeeInvoiceItem
     invoices = FeeInvoice.objects.filter(student=student)
     total_due = sum(float(i.amount_due) for i in invoices)
@@ -76,7 +88,6 @@ def portal_lookup(request):
     else:
         fee_status = 'unpaid'
 
-    # Latest report card with subjects
     from apps.exams.models import ReportCard
     latest_rc = ReportCard.objects.filter(student=student).order_by('-generated_at').first()
     report_card_data = None
@@ -112,7 +123,6 @@ def portal_lookup(request):
             'subjects': subjects,
         }
 
-    # Attendance summary
     from apps.attendance.models import Attendance
     attendance_records = Attendance.objects.filter(student=student)
     total_att = attendance_records.count()
@@ -121,26 +131,24 @@ def portal_lookup(request):
     late_count = attendance_records.filter(status='late').count()
     attendance_rate = round(present_count / total_att * 100, 1) if total_att > 0 else None
 
-    # Recent notifications
     from apps.comms.models import Notification
     recent_notifs = []
-    if student.user_id:
-        notifs = Notification.objects.filter(recipient=student.user)[:5]
-        recent_notifs = [{
-            'id': str(n.id),
-            'type': n.notif_type,
-            'title': n.title,
-            'message': n.message,
-            'read': n.read,
-            'created_at': n.created_at.isoformat(),
-        } for n in notifs]
+    notifs = Notification.objects.filter(recipient=student)[:5]
+    recent_notifs = [{
+        'id': str(n.id),
+        'type': n.notif_type,
+        'title': n.title,
+        'message': n.message,
+        'read': n.read,
+        'created_at': n.created_at.isoformat(),
+    } for n in notifs]
 
     return Response({
         'student_id': student.id,
-        'full_name': student.full_name,
+        'full_name': student.get_full_name(),
         'admission_no': student.admission_no,
         'class_name': student.class_group.name if student.class_group else None,
-        'status': student.status,
+        'status': student.student_status,
         'school_name': student.school.name if student.school else None,
         'recent_notifications': recent_notifs,
         'fee_summary': {
@@ -165,14 +173,14 @@ def portal_lookup(request):
 @permission_classes([permissions.AllowAny])
 def portal_setup(request):
     phone = request.data.get('phone', '').strip()
-    pin = request.data.get('pin', '')
+    password = request.data.get('password', '')
     student_code = request.data.get('student_code', '').strip().upper()
 
-    if not phone or not pin or not student_code:
-        return Response({'error': 'phone, pin, and student_code are required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not phone or not password or not student_code:
+        return Response({'error': 'phone, password, and student_code are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if not pin.isdigit() or len(pin) < 4 or len(pin) > 6:
-        return Response({'error': 'PIN must be 4-6 digits'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(password) < 6:
+        return Response({'error': 'Password must be at least 6 characters'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         sac = StudentAccessCode.objects.select_related('student', 'student__school').get(code=student_code)
@@ -182,82 +190,36 @@ def portal_setup(request):
     student = sac.student
     school = student.school
 
-    guardian, created = GuardianAccount.objects.get_or_create(
-        school=school,
-        phone=phone,
-        defaults={'pin': make_password(pin)},
-    )
-    if not created:
-        guardian.set_pin(pin)
-        guardian.save()
-
-    GuardianStudent.objects.get_or_create(guardian=guardian, student=student)
-
-    return Response({'message': 'Account set up successfully. You can now log in.'}, status=status.HTTP_201_CREATED)
-
-
-@api_view(['POST'])
-@permission_classes([permissions.AllowAny])
-def portal_login(request):
-    phone = request.data.get('phone', '').strip()
-    pin = request.data.get('pin', '')
-
-    if not phone or not pin:
-        return Response({'error': 'phone and pin are required'}, status=status.HTTP_400_BAD_REQUEST)
-
-    # Try to find guardian by phone across all schools
-    guardians = GuardianAccount.objects.filter(phone=phone)
-    if len(guardians) == 0:
-        return Response({'error': 'No account found with this phone number'}, status=status.HTTP_404_NOT_FOUND)
-
-    matched = None
-    for g in guardians:
-        if check_password(pin, g.pin):
-            matched = g
-            break
-
-    if not matched:
-        return Response({'error': 'Invalid PIN'}, status=status.HTTP_401_UNAUTHORIZED)
-
-    # Create or get a User record for JWT
-    from apps.accounts.models import User
-    username = f'guardian_{matched.id}'
-    user, _ = User.objects.get_or_create(
-        username=username,
+    parent_username = f'parent.{phone}'
+    parent, created = User.objects.get_or_create(
+        username=parent_username,
         defaults={
-            'school': matched.school,
-            'email': f'{username}@guardian.clariva.ng',
+            'school': school,
+            'phone': phone,
             'role': 'parent',
-            'phone': matched.phone,
-            'first_name': 'Guardian',
-            'last_name': str(matched.phone),
+            'email': f'{parent_username}@parent.clariva.ng',
         },
     )
-    refresh = RefreshToken.for_user(user)
-    refresh['guardian_id'] = matched.id
-    refresh['phone'] = matched.phone
+    if created:
+        parent.set_password(password)
+        parent.save()
+    else:
+        parent.set_password(password)
+        parent.save()
 
-    return Response({
-        'access': str(refresh.access_token),
-        'refresh': str(refresh),
-        'guardian_id': matched.id,
-        'phone': matched.phone,
-    })
+    GuardianStudent.objects.get_or_create(guardian=parent, student=student)
+
+    return Response({'message': 'Account set up successfully. You can now log in.'}, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def portal_children(request):
     user = request.user
-    # Check if this user has a guardian account linked
     if user.role != 'parent':
         return Response({'error': 'Not a parent account'}, status=status.HTTP_403_FORBIDDEN)
 
-    guardian_accounts = GuardianAccount.objects.filter(phone=user.phone)
-    if not guardian_accounts.exists():
-        return Response({'error': 'No guardian account linked'}, status=status.HTTP_404_NOT_FOUND)
-
-    links = GuardianStudent.objects.filter(guardian__in=guardian_accounts).select_related(
+    links = GuardianStudent.objects.filter(guardian=user).select_related(
         'student', 'student__class_group'
     )
 
@@ -278,26 +240,24 @@ def portal_children(request):
         present_count = Attendance.objects.filter(student=student, status='present').count()
         attendance_rate = round(present_count / total_attendance * 100, 1) if total_attendance > 0 else None
 
-        # Recent notifications
         from apps.comms.models import Notification
         recent_notifs = []
-        if student.user_id:
-            notifs = Notification.objects.filter(recipient=student.user)[:5]
-            recent_notifs = [{
-                'id': str(n.id),
-                'type': n.notif_type,
-                'title': n.title,
-                'message': n.message,
-                'read': n.read,
-                'created_at': n.created_at.isoformat(),
-            } for n in notifs]
+        notifs = Notification.objects.filter(recipient=student)[:5]
+        recent_notifs = [{
+            'id': str(n.id),
+            'type': n.notif_type,
+            'title': n.title,
+            'message': n.message,
+            'read': n.read,
+            'created_at': n.created_at.isoformat(),
+        } for n in notifs]
 
         result.append({
             'id': student.id,
-            'full_name': student.full_name,
+            'full_name': student.get_full_name(),
             'admission_no': student.admission_no,
             'class_name': student.class_group.name if student.class_group else None,
-            'status': student.status,
+            'status': student.student_status,
             'gender': student.gender,
             'recent_notifications': recent_notifs,
             'fee_summary': {

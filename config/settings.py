@@ -20,7 +20,7 @@ INSTALLED_APPS = [
     'corsheaders',
     # Local apps
     'apps.accounts',
-    'apps.schools',
+    'apps.schools.apps.SchoolsConfig',
     'apps.students',
     'apps.classes',
     'apps.staff',
@@ -65,20 +65,22 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 import re
+from urllib.parse import unquote
 db_url = config('DATABASE_URL', default='sqlite:///db.sqlite3')
 if db_url.startswith('sqlite'):
     DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3'}}
 else:
-    match = re.match(r'postgres://(.+):(.+)@(.+):(\d+)/(.+)', db_url)
+    match = re.match(r'postgres(?:ql)?://(.+):(.+)@(.+):(\d+)/(.+)', db_url)
     if match:
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.postgresql',
                 'NAME': match.group(5),
-                'USER': match.group(1),
-                'PASSWORD': match.group(2),
+                'USER': unquote(match.group(1)),
+                'PASSWORD': unquote(match.group(2)),
                 'HOST': match.group(3),
                 'PORT': match.group(4),
+                'OPTIONS': {'sslmode': 'require'},
             }
         }
 
@@ -113,9 +115,8 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'apps.mixins.CustomPagination',
     'PAGE_SIZE': 200,
-    'PAGE_SIZE_QUERY_PARAM': 'page_size',
     'DEFAULT_RENDERER_CLASSES': (
         'rest_framework.renderers.JSONRenderer',
     ),

@@ -7,8 +7,11 @@ class Subject(BaseUUIDModel):
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=20, null=True, blank=True)
     year_group = models.CharField(max_length=20, null=True, blank=True, help_text='e.g. SS1 — available to all classes in this year group')
-    teacher = models.ForeignKey('staff.Staff', on_delete=models.SET_NULL, null=True, blank=True)
+    teacher = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True)
     is_core = models.BooleanField(default=False)
+    grading_mode = models.CharField(max_length=20, default='manual', choices=[
+        ('cbt', 'Full CBT'), ('manual', 'Full Manual'), ('hybrid', 'Hybrid'),
+    ])
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -19,7 +22,7 @@ class Subject(BaseUUIDModel):
 
 class StudentSubject(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
-    student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
+    student = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
     academic_year = models.CharField(max_length=20, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -28,7 +31,7 @@ class StudentSubject(BaseUUIDModel):
         unique_together = ['student', 'subject', 'academic_year']
 
     def __str__(self):
-        return f'{self.student.full_name} — {self.subject.name}'
+        return f'{self.student.get_full_name()} — {self.subject.name}'
 
 class Exam(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
@@ -42,6 +45,11 @@ class Exam(BaseUUIDModel):
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, default='draft')
+    component = models.CharField(max_length=20, null=True, blank=True, choices=[
+        ('ca1', 'CA 1'), ('ca2', 'CA 2'), ('assignment', 'Assignment'), ('exam', 'Exam'),
+    ])
+    term = models.CharField(max_length=50, null=True, blank=True)
+    academic_year = models.CharField(max_length=20, null=True, blank=True)
     shuffle_questions = models.BooleanField(default=False)
     shuffle_options = models.BooleanField(default=False)
     time_limit_enforced = models.BooleanField(default=True)
@@ -117,7 +125,7 @@ class TimeSlot(BaseUUIDModel):
     start_time = models.TimeField()
     end_time = models.TimeField()
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
-    teacher = models.ForeignKey('staff.Staff', on_delete=models.SET_NULL, null=True, blank=True)
+    teacher = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True)
     room = models.CharField(max_length=100, null=True, blank=True)
 
     class Meta:
@@ -130,7 +138,7 @@ class TimeSlot(BaseUUIDModel):
 
 class ReportCard(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
-    student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
+    student = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='report_cards')
     term = models.CharField(max_length=50)
     academic_year = models.CharField(max_length=20)
     grades = models.JSONField(help_text='Snapshot of all subject grades for this term')
@@ -138,24 +146,27 @@ class ReportCard(BaseUUIDModel):
     total_possible = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True)
     average = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     class_rank = models.IntegerField(null=True, blank=True)
+    is_released = models.BooleanField(default=False)
+    released_at = models.DateTimeField(null=True, blank=True)
+    released_by = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='released_cards')
     generated_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = ['student', 'term', 'academic_year']
 
     def __str__(self):
-        return f'{self.student.full_name} — {self.term} {self.academic_year}'
+        return f'{self.student.get_full_name()} — {self.term} {self.academic_year}'
 
 
 class ExamSession(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
-    student = models.ForeignKey('students.Student', on_delete=models.CASCADE)
+    student = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
     session_code = models.CharField(max_length=20, null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
-    score = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
-    total_marks = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    score = models.IntegerField(null=True, blank=True)
+    total_marks = models.IntegerField(null=True, blank=True)
     passed = models.BooleanField(null=True)
     answers = models.JSONField(null=True, blank=True)
     tab_switches = models.IntegerField(default=0)

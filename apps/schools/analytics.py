@@ -1,6 +1,5 @@
 from django.db.models import Sum, Count, Q, Avg
-from apps.students.models import Student
-from apps.staff.models import Staff
+from apps.accounts.models import User
 from apps.classes.models import Class
 from apps.exams.models import Subject, ExamSession
 from apps.fees.models import FeeInvoice
@@ -8,9 +7,9 @@ from apps.attendance.models import Attendance
 
 
 def get_summary(school_id):
-    students = Student.objects.filter(school_id=school_id)
-    active_students = students.filter(status='active')
-    staff = Staff.objects.filter(school_id=school_id)
+    students = User.objects.filter(school_id=school_id, role='student')
+    active_students = students.filter(student_status='active')
+    staff = User.objects.filter(school_id=school_id, role__in=('principal', 'teacher', 'bursary', 'school_admin'))
     classes = Class.objects.filter(school_id=school_id)
     subjects = Subject.objects.filter(school_id=school_id)
     invoices = FeeInvoice.objects.filter(student__school_id=school_id)
