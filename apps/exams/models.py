@@ -1,5 +1,7 @@
 from datetime import time
 from django.db import models
+from fernet_fields import EncryptedCharField, EncryptedTextField
+
 from apps.base.models import BaseUUIDModel
 
 class Subject(BaseUUIDModel):
@@ -64,7 +66,7 @@ class Question(BaseUUIDModel):
         ('mcq', 'Multiple Choice'), ('true_false', 'True/False'), ('short_answer', 'Short Answer')
     ])
     options = models.JSONField(null=True, blank=True)
-    correct_answer = models.TextField()
+    correct_answer = EncryptedTextField()
     topic = models.CharField(max_length=255, null=True, blank=True)
     difficulty = models.CharField(max_length=10, default='medium')
     mark = models.IntegerField(default=1)
@@ -162,7 +164,7 @@ class ExamSession(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE)
     student = models.ForeignKey('accounts.User', on_delete=models.CASCADE)
-    session_code = models.CharField(max_length=20, null=True, blank=True)
+    session_code = EncryptedCharField(max_length=20, null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
     score = models.IntegerField(null=True, blank=True)

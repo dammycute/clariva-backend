@@ -1,24 +1,11 @@
-from rest_framework import serializers, viewsets, status
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from .models import Grade
+from .serializers import GradeSerializer
+from .services import GradeService
 from apps.mixins import SchoolFilterMixin
-
-class GradeSerializer(serializers.ModelSerializer):
-    student_name = serializers.SerializerMethodField()
-    subject_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Grade
-        fields = '__all__'
-        read_only_fields = ('school', 'results_status', 'submitted_by', 'submitted_at', 'approved_by', 'approved_at')
-
-    def get_student_name(self, obj):
-        return obj.student.get_full_name() if obj.student else None
-
-    def get_subject_name(self, obj):
-        return obj.subject.name if obj.subject else None
 
 
 class GradeViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
@@ -56,20 +43,11 @@ class GradeViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         term = request.data.get('term')
         academic_year = request.data.get('academic_year')
         subject_id = request.data.get('subject_id')
-        if not all([class_id, term, academic_year, subject_id]):
-            return Response({'error': 'class_id, term, academic_year, subject_id required'}, status=400)
-        if request.user.role not in ('teacher', 'principal', 'school_admin', 'super_admin'):
-            return Response({'error': 'Only staff can submit grades'}, status=403)
-        updated = Grade.objects.filter(
-            student__class_group_id=class_id, term=term,
-            academic_year=academic_year, subject_id=subject_id,
-            school=request.user.school,
-        ).exclude(results_status='approved').update(
-            results_status='submitted',
-            submitted_by=request.user,
-            submitted_at=timezone.now(),
-        )
-        return Response({'submitted': updated})
+        try:
+            result = GradeService.submit_class(request.user, class_id, subject_id, term, academic_year)
+            return Response(result)
+        except (PermissionDenied, ValidationError) as e:
+            return Response({'error': str(e)}, status=getattr(e, 'status_code', 400))
 
     @action(detail=False, methods=['post'])
     def approve_class(self, request):
@@ -77,20 +55,11 @@ class GradeViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         term = request.data.get('term')
         academic_year = request.data.get('academic_year')
         subject_id = request.data.get('subject_id')
-        if not all([class_id, term, academic_year, subject_id]):
-            return Response({'error': 'class_id, term, academic_year, subject_id required'}, status=400)
-        if request.user.role not in ('principal', 'school_admin', 'super_admin'):
-            return Response({'error': 'Only principals or admins can approve grades'}, status=403)
-        updated = Grade.objects.filter(
-            student__class_group_id=class_id, term=term,
-            academic_year=academic_year, subject_id=subject_id,
-            school=request.user.school, results_status='submitted',
-        ).update(
-            results_status='approved',
-            approved_by=request.user,
-            approved_at=timezone.now(),
-        )
-        return Response({'approved': updated})
+        try:
+            result = GradeService.approve_class(request.user, class_id, subject_id, term, academic_year)
+            return Response(result)
+        except (PermissionDenied, ValidationError) as e:
+            return Response({'error': str(e)}, status=getattr(e, 'status_code', 400))
 
     @action(detail=False, methods=['post'])
     def reject_class(self, request):
@@ -99,14 +68,8 @@ class GradeViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         academic_year = request.data.get('academic_year')
         subject_id = request.data.get('subject_id')
         note = request.data.get('note', '')
-        if not all([class_id, term, academic_year, subject_id]):
-            return Response({'error': 'class_id, term, academic_year, subject_id required'}, status=400)
-        updated = Grade.objects.filter(
-            student__class_group_id=class_id, term=term,
-            academic_year=academic_year, subject_id=subject_id,
-            school=request.user.school, results_status='submitted',
-        ).update(
-            results_status='rejected',
-            rejection_note=note,
-        )
-        return Response({'rejected': updated})
+        try:
+            result = GradeService.reject_class(request.user, class_id, subject_id, term, academic_year, note)
+            return Response(result)
+        except (PermissionDenied, ValidationError) as e:
+            return Response({'error': str(e)}, status=getattr(e, 'status_code', 400))

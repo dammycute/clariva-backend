@@ -1,4 +1,6 @@
 from django.db import models
+from fernet_fields import EncryptedCharField
+
 from apps.base.models import BaseUUIDModel
 
 class FeeItem(BaseUUIDModel):
@@ -26,7 +28,7 @@ class FeeInvoice(BaseUUIDModel):
     status = models.CharField(max_length=20, default='unpaid')
     due_date = models.DateField(null=True, blank=True)
     payment_method = models.CharField(max_length=50, null=True, blank=True)
-    payment_ref = models.CharField(max_length=255, null=True, blank=True)
+    payment_ref = EncryptedCharField(max_length=255, null=True, blank=True)
     paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

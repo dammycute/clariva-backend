@@ -28,6 +28,6 @@ def auto_create_draft_exams(sender, instance, created, **kwargs):
             pass_mark=40,
             status='draft',
             component=comp,
-            term='1st Term',
-            academic_year='2025/2026',
+            term=instance.school.current_term,
+            academic_year=instance.school.current_academic_year,
         )

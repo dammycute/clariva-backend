@@ -12,3 +12,8 @@ class Attendance(BaseUUIDModel):
 
     def __str__(self):
         return f'{self.student.get_full_name()} - {self.date} - {self.status}'
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['student', 'date', 'class_group'], name='unique_attendance_per_student_date_class'),
+        ]

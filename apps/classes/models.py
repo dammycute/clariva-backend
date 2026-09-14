@@ -17,5 +17,5 @@ class Class(BaseUUIDModel):
         ordering = ('year_group', 'arm')
         verbose_name_plural = 'classes'
         constraints = [
-            models.UniqueConstraint(fields=['school', 'name'], name='unique_class_per_school'),
+            models.UniqueConstraint(fields=['school', 'name', 'academic_year'], name='unique_class_per_school_year'),
         ]

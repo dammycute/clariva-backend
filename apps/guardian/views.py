@@ -2,8 +2,10 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.conf import settings
 
 from apps.accounts.models import User, StudentAccessCode
+from apps.base.encryption import hash_value, verify_hash
 from .models import GuardianStudent
 
 
@@ -24,18 +26,50 @@ def _rate_limit_ip(key_prefix, max_requests=10, window=60):
     return decorator
 
 
+def _generate_otp(phone):
+    import secrets
+    otp = ''.join(secrets.choice('0123456789') for _ in range(6))
+    cache.set(f'portal_otp:{phone}', otp, 300)  # 5 min expiry
+    return otp
+
+
+def _verify_otp(phone, otp):
+    stored = cache.get(f'portal_otp:{phone}')
+    if not stored or stored != otp:
+        return False
+    cache.delete(f'portal_otp:{phone}')
+    return True
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
 @_rate_limit_ip('portal_lookup')
 def portal_lookup(request):
     admission_no = request.data.get('admission_no', '').strip()
     code = request.data.get('code', '').strip().upper()
+    school_id = request.data.get('school_id')
+    subdomain = request.data.get('subdomain', '').strip()
+
+    if not school_id and not subdomain:
+        return Response(
+            {'error': 'school_id or subdomain is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    from apps.schools.models import School
+    if subdomain:
+        try:
+            school = School.objects.get(subdomain__iexact=subdomain)
+            school_id = school.id
+        except School.DoesNotExist:
+            return Response({'error': 'School not found'}, status=status.HTTP_404_NOT_FOUND)
 
     if code and not admission_no:
+        code_hash = hash_value(code)
         try:
             sac = StudentAccessCode.objects.select_related(
-                'student', 'student__school', 'student__class_group'
-            ).get(code=code)
+                'student', 'student__school', 'student__student_profile__class_group'
+            ).get(code_hash=code_hash, student__school_id=school_id)
         except StudentAccessCode.DoesNotExist:
             return Response({'error': 'Invalid access code'}, status=status.HTTP_404_NOT_FOUND)
         student = sac.student
@@ -45,10 +79,15 @@ def portal_lookup(request):
         if not code:
             return Response({'error': 'Access code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
+        admission_hash = hash_value(admission_no)
         try:
             student = User.objects.select_related(
-                'school', 'class_group'
-            ).get(admission_no__iexact=admission_no, role='student')
+                'school', 'student_profile__class_group'
+            ).get(
+                student_profile__admission_no_hash=admission_hash,
+                role='student',
+                school_id=school_id
+            )
         except User.DoesNotExist:
             return Response({'error': 'Student not found with this admission number'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -57,7 +96,7 @@ def portal_lookup(request):
         except StudentAccessCode.DoesNotExist:
             return Response({'error': 'No access code set for this student'}, status=status.HTTP_404_NOT_FOUND)
 
-        if sac.code != code:
+        if not verify_hash(code, sac.code):
             return Response({'error': 'Invalid access code'}, status=status.HTTP_401_UNAUTHORIZED)
 
     from apps.fees.models import FeeInvoice, FeeInvoiceItem
@@ -143,12 +182,13 @@ def portal_lookup(request):
         'created_at': n.created_at.isoformat(),
     } for n in notifs]
 
+    sp = getattr(student, 'student_profile', None)
     return Response({
         'student_id': student.id,
         'full_name': student.get_full_name(),
-        'admission_no': student.admission_no,
-        'class_name': student.class_group.name if student.class_group else None,
-        'status': student.student_status,
+        'admission_no': sp.admission_no if sp else None,
+        'class_name': sp.class_group.name if sp and sp.class_group else None,
+        'status': sp.student_status if sp else None,
         'school_name': student.school.name if student.school else None,
         'recent_notifications': recent_notifs,
         'fee_summary': {
@@ -171,19 +211,84 @@ def portal_lookup(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-def portal_setup(request):
+@_rate_limit_ip('portal_setup_init')
+def portal_setup_initiate(request):
+    phone = request.data.get('phone', '').strip()
+    student_code = request.data.get('student_code', '').strip().upper()
+    subdomain = request.data.get('subdomain', '').strip()
+
+    if not phone or not student_code:
+        return Response(
+            {'error': 'phone and student_code are required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit per phone: 5 attempts per 15 minutes
+    phone_key = f'portal_setup_attempts:{phone}'
+    attempts = cache.get(phone_key, 0)
+    if attempts >= 5:
+        return Response(
+            {'error': 'Too many attempts. Try again in 15 minutes.'},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    # Validate student_code belongs to a real student
+    sac_qs = StudentAccessCode.objects.select_related('student', 'student__school')
+    if subdomain:
+        sac_qs = sac_qs.filter(student__school__subdomain__iexact=subdomain)
+
+    student_code_hash = hash_value(student_code)
+    try:
+        sac = sac_qs.get(code_hash=student_code_hash)
+    except StudentAccessCode.DoesNotExist:
+        return Response({'error': 'Invalid student code'}, status=status.HTTP_404_NOT_FOUND)
+
+    otp = _generate_otp(phone)
+    cache.set(phone_key, attempts + 1, 900)  # 15 min window
+
+    # In production, send OTP via Termii/SMS here
+    # For dev, return OTP in response for testing
+    response_data = {'message': 'OTP sent to your phone number'}
+    if settings.DEBUG:
+        response_data['otp'] = otp  # Remove in production
+    return Response(response_data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@_rate_limit_ip('portal_setup_verify')
+def portal_setup_verify(request):
     phone = request.data.get('phone', '').strip()
     password = request.data.get('password', '')
     student_code = request.data.get('student_code', '').strip().upper()
+    otp = request.data.get('otp', '').strip()
+    subdomain = request.data.get('subdomain', '').strip()
 
-    if not phone or not password or not student_code:
-        return Response({'error': 'phone, password, and student_code are required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not phone or not password or not student_code or not otp:
+        return Response(
+            {'error': 'phone, password, student_code, and otp are required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     if len(password) < 6:
-        return Response({'error': 'Password must be at least 6 characters'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {'error': 'Password must be at least 6 characters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
+    if not _verify_otp(phone, otp):
+        return Response(
+            {'error': 'Invalid or expired OTP'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    sac_qs = StudentAccessCode.objects.select_related('student', 'student__school')
+    if subdomain:
+        sac_qs = sac_qs.filter(student__school__subdomain__iexact=subdomain)
+
+    student_code_hash = hash_value(student_code)
     try:
-        sac = StudentAccessCode.objects.select_related('student', 'student__school').get(code=student_code)
+        sac = sac_qs.get(code_hash=student_code_hash)
     except StudentAccessCode.DoesNotExist:
         return Response({'error': 'Invalid student code'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -200,16 +305,33 @@ def portal_setup(request):
             'email': f'{parent_username}@parent.clariva.ng',
         },
     )
-    if created:
-        parent.set_password(password)
-        parent.save()
-    else:
-        parent.set_password(password)
-        parent.save()
+
+    if not created:
+        # Existing account — verify phone ownership before allowing password reset
+        if parent.phone != phone:
+            return Response(
+                {'error': 'Phone number does not match existing account'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    parent.set_password(password)
+    parent.save()
 
     GuardianStudent.objects.get_or_create(guardian=parent, student=student)
 
+    # Clear rate limit on success
+    cache.delete(f'portal_setup_attempts:{phone}')
+
     return Response({'message': 'Account set up successfully. You can now log in.'}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def portal_setup(request):
+    return Response(
+        {'error': 'Use POST /api/portal/setup/initiate/ then POST /api/portal/setup/verify/ with OTP'},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 @api_view(['GET'])
@@ -220,7 +342,7 @@ def portal_children(request):
         return Response({'error': 'Not a parent account'}, status=status.HTTP_403_FORBIDDEN)
 
     links = GuardianStudent.objects.filter(guardian=user).select_related(
-        'student', 'student__class_group'
+        'student', 'student__student_profile__class_group'
     )
 
     from apps.fees.models import FeeInvoice
@@ -252,12 +374,13 @@ def portal_children(request):
             'created_at': n.created_at.isoformat(),
         } for n in notifs]
 
+        sp = getattr(student, 'student_profile', None)
         result.append({
             'id': student.id,
             'full_name': student.get_full_name(),
-            'admission_no': student.admission_no,
-            'class_name': student.class_group.name if student.class_group else None,
-            'status': student.student_status,
+            'admission_no': sp.admission_no if sp else None,
+            'class_name': sp.class_group.name if sp and sp.class_group else None,
+            'status': sp.student_status if sp else None,
             'gender': student.gender,
             'recent_notifications': recent_notifs,
             'fee_summary': {

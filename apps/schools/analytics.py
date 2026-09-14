@@ -8,7 +8,7 @@ from apps.attendance.models import Attendance
 
 def get_summary(school_id):
     students = User.objects.filter(school_id=school_id, role='student')
-    active_students = students.filter(student_status='active')
+    active_students = students.filter(student_profile__student_status='active')
     staff = User.objects.filter(school_id=school_id, role__in=('principal', 'teacher', 'bursary', 'school_admin'))
     classes = Class.objects.filter(school_id=school_id)
     subjects = Subject.objects.filter(school_id=school_id)

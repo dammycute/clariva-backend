@@ -1,6 +1,14 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from fernet_fields import EncryptedCharField, EncryptedTextField
+
 from apps.base.models import BaseUUIDModel
+
+TERM_CHOICES = [
+    ('1st Term', '1st Term'),
+    ('2nd Term', '2nd Term'),
+    ('3rd Term', '3rd Term'),
+]
 
 DEFAULT_GRADE_BOUNDARIES = [
     {"name": "A1", "min_pct": 75}, {"name": "B2", "min_pct": 70},
@@ -60,13 +68,13 @@ class School(BaseUUIDModel):
     subdomain = models.CharField(max_length=100, unique=True)
     logo_url = models.URLField(null=True, blank=True)
     accent_color = models.CharField(max_length=7, default='#1A7A4A')
-    address = models.TextField(null=True, blank=True)
+    address = EncryptedTextField(null=True, blank=True)
     lga = models.CharField(max_length=100, null=True, blank=True)
     state = models.CharField(max_length=100, null=True, blank=True)
     school_type = models.CharField(max_length=100, null=True, blank=True)
-    proprietor_name = models.CharField(max_length=255, null=True, blank=True)
-    proprietor_phone = models.CharField(max_length=20, null=True, blank=True)
-    current_term = models.CharField(max_length=50, default='1st Term')
+    proprietor_name = EncryptedCharField(max_length=255, null=True, blank=True)
+    proprietor_phone = EncryptedCharField(max_length=20, null=True, blank=True)
+    current_term = models.CharField(max_length=50, choices=TERM_CHOICES, default='1st Term')
     current_academic_year = models.CharField(max_length=20, default='2025/2026')
     plan = models.CharField(max_length=50, default='trial')
     status = models.CharField(max_length=20, default='active')

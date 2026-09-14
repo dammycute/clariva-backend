@@ -6,7 +6,7 @@ from .models import FeeItem, FeeInvoice
 from .serializers import FeeItemSerializer, FeeInvoiceSerializer
 
 
-FINANCE_ROLES = {'school_admin', 'bursary', 'super_admin'}
+FINANCE_ROLES = {'school_admin', 'admin_officer', 'bursary', 'super_admin'}
 
 
 class FeeRolePermission(permissions.IsAuthenticated):

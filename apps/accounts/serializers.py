@@ -25,19 +25,19 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
 
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, min_length=6)
-
+class OnboardSerializer(serializers.ModelSerializer):
+    """Public endpoint for new school registration. Only allows school_admin role."""
+    password = serializers.CharField(write_only=True, min_length=8)
     username = serializers.CharField(required=False)
-    email = serializers.CharField(required=False)
+    email = serializers.EmailField(required=True)
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone', 'role')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone')
 
-    def validate_username(self, value):
-        if not value:
-            return None
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('A user with this email already exists.')
         return value
 
     def create(self, validated_data):
@@ -49,12 +49,47 @@ class RegisterSerializer(serializers.ModelSerializer):
             username = f'{base}{counter}'
             counter += 1
         validated_data['username'] = username
-        from apps.schools.models import School
-        role = validated_data.get('role', 'school_admin')
-        if role != 'super_admin' and not validated_data.get('school'):
-            school = School.objects.first()
-            if school:
-                validated_data['school'] = school
+        validated_data['role'] = 'school_admin'
+        user = User(**validated_data)
+        user.set_password(password)
+        user.save()
+        return user
+
+
+class AdminCreateUserSerializer(serializers.ModelSerializer):
+    """Admin-only endpoint for creating users with any role."""
+    password = serializers.CharField(write_only=True, min_length=8)
+    username = serializers.CharField(required=False)
+    email = serializers.EmailField(required=True)
+
+    class Meta:
+        model = User
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone', 'role', 'school')
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('A user with this email already exists.')
+        return value
+
+    def validate_role(self, value):
+        request = self.context.get('request')
+        if request and request.user:
+            caller_role = request.user.role
+            if value == 'super_admin' and caller_role != 'super_admin':
+                raise serializers.ValidationError('Only super_admin can create super_admin accounts.')
+            if value == 'school_admin' and caller_role not in ('super_admin', 'school_admin'):
+                raise serializers.ValidationError('Insufficient permissions to create this role.')
+        return value
+
+    def create(self, validated_data):
+        password = validated_data.pop('password')
+        username = validated_data.pop('username', None) or validated_data.get('email', '').split('@')[0]
+        base = username
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f'{base}{counter}'
+            counter += 1
+        validated_data['username'] = username
         user = User(**validated_data)
         user.set_password(password)
         user.save()
@@ -63,7 +98,13 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     class_name = serializers.SerializerMethodField()
-    access_code = serializers.SerializerMethodField()
+    admission_no = serializers.SerializerMethodField()
+    class_group = serializers.SerializerMethodField()
+    guardian_name = serializers.SerializerMethodField()
+    guardian_phone = serializers.SerializerMethodField()
+    guardian_email = serializers.SerializerMethodField()
+    student_status = serializers.SerializerMethodField()
+    academic_year = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -73,17 +114,37 @@ class UserSerializer(serializers.ModelSerializer):
             'date_of_birth', 'gender', 'lga_of_origin', 'state_of_origin',
             'admission_no', 'class_group', 'class_name', 'guardian_name',
             'guardian_phone', 'guardian_email', 'student_status', 'academic_year',
-            'access_code',
         )
-        read_only_fields = ('school_id', 'access_code')
+        read_only_fields = ('school_id',)
 
     def get_class_name(self, obj):
-        return obj.class_group.name if obj.class_group else None
+        sp = getattr(obj, 'student_profile', None)
+        return sp.class_group.name if sp and sp.class_group else None
 
-    def get_access_code(self, obj):
-        if obj.role != 'student':
-            return None
-        try:
-            return obj.access_code_link.code
-        except User.access_code_link.RelatedObjectDoesNotExist:
-            return None
+    def get_admission_no(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.admission_no if sp else None
+
+    def get_class_group(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return str(sp.class_group_id) if sp and sp.class_group_id else None
+
+    def get_guardian_name(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.guardian_name if sp else None
+
+    def get_guardian_phone(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.guardian_phone if sp else None
+
+    def get_guardian_email(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.guardian_email if sp else None
+
+    def get_student_status(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.student_status if sp else None
+
+    def get_academic_year(self, obj):
+        sp = getattr(obj, 'student_profile', None)
+        return sp.academic_year if sp else None

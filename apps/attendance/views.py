@@ -1,18 +1,8 @@
-from rest_framework import serializers, viewsets
+from rest_framework import viewsets
 from .models import Attendance
-
-class AttendanceSerializer(serializers.ModelSerializer):
-    student_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Attendance
-        fields = '__all__'
-        read_only_fields = ('school',)
-
-    def get_student_name(self, obj):
-        return obj.student.get_full_name() if obj.student else None
-
+from .serializers import AttendanceSerializer
 from apps.mixins import SchoolFilterMixin
+
 
 class AttendanceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Attendance.objects.select_related('student').all()
@@ -22,21 +12,19 @@ class AttendanceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         qs = super().get_queryset()
         user = self.request.user
 
-        # Student self-access
         if user.role == 'student':
             return qs.filter(student=user)
 
-        # Teacher scoping
         if user.role == 'teacher':
             teacher_classes = user.class_set.values_list('id', flat=True)
             if teacher_classes:
-                qs = qs.filter(class_group_id__in=teacher_classes)
+                qs = qs.filter(student__student_profile__class_group_id__in=teacher_classes)
 
         class_id = self.request.query_params.get('class_id')
         date = self.request.query_params.get('date')
         student_id = self.request.query_params.get('student_id')
         if class_id:
-            qs = qs.filter(class_group_id=class_id)
+            qs = qs.filter(student__student_profile__class_group_id=class_id)
         if date:
             qs = qs.filter(date=date)
         if student_id:

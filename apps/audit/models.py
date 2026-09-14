@@ -1,5 +1,8 @@
 from django.db import models
+from fernet_fields import EncryptedCharField
+
 from apps.base.models import BaseUUIDModel
+
 
 class ActivityLog(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE, null=True, blank=True)
@@ -9,9 +12,8 @@ class ActivityLog(BaseUUIDModel):
     object_id = models.CharField(max_length=50, null=True, blank=True)
     object_repr = models.CharField(max_length=255, null=True, blank=True)
     changes = models.JSONField(null=True, blank=True)
-    ip_address = models.CharField(max_length=45, null=True, blank=True)
+    ip_address = EncryptedCharField(max_length=45, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
     class Meta:
         ordering = ('-created_at',)
         verbose_name_plural = 'activity logs'
