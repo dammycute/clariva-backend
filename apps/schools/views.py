@@ -5,7 +5,10 @@ from django.core.management import call_command
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
+from apps.audit.models import ActivityLog
+from apps.staff.permissions import IsSchoolAdminRole
 from .models import School, GradingConfig, DEFAULT_GRADE_BOUNDARIES, DEFAULT_COMPONENTS
 from .serializers import SchoolSerializer, GradingConfigSerializer
 from .analytics import get_summary
@@ -25,9 +28,27 @@ class SchoolViewSet(viewsets.ModelViewSet):
     serializer_class = SchoolSerializer
     permission_classes = (permissions.IsAuthenticated,)
 
+    def get_queryset(self):
+        user = self.request.user
+        if not user.school_id:
+            if user.is_superuser or user.role == 'super_admin':
+                return School.objects.all()
+            raise PermissionDenied(
+                'No school is assigned to your account. Contact your administrator.'
+            )
+        if not user.is_superuser and user.role != 'super_admin':
+            school = School.objects.get(pk=user.school_id)
+            if school.status == 'suspended':
+                raise PermissionDenied('This school account has been suspended.')
+        return School.objects.filter(pk=user.school_id)
+
     def get_permissions(self):
         if self.action in ('update', 'partial_update', 'destroy', 'create'):
             return [permissions.IsAuthenticated(), IsSuperAdmin()]
+        if self.action == 'backup':
+            return [permissions.IsAuthenticated(), IsSchoolAdminRole()]
+        if self.action == 'grading' and self.request.method in ('PUT', 'PATCH'):
+            return [permissions.IsAuthenticated(), IsSchoolAdminRole()]
         return [permissions.IsAuthenticated()]
 
     @action(detail=True, methods=['get'])
@@ -57,9 +78,19 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def backup(self, request):
-        school_id = request.user.school_id
-        if not school_id:
-            return Response({'error': 'No school assigned'}, status=status.HTTP_400_BAD_REQUEST)
+        if request.user.role == 'super_admin' and not request.user.school_id:
+            school_id = request.query_params.get('school_id')
+            if not school_id:
+                return Response(
+                    {'error': 'school_id query parameter is required'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not School.objects.filter(pk=school_id).exists():
+                return Response({'error': 'School not found'}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            school_id = request.user.school_id
+            if not school_id:
+                return Response({'error': 'No school assigned'}, status=status.HTTP_400_BAD_REQUEST)
 
         from apps.accounts.models import User
         from apps.classes.models import Class
@@ -93,6 +124,16 @@ class SchoolViewSet(viewsets.ModelViewSet):
             counts[name] = qs.count()
             backup_data[name] = dj_serializers.serialize('json', qs)
 
+        ActivityLog.objects.create(
+            school_id=school_id,
+            user=request.user,
+            action='exported',
+            model_name='School',
+            object_id=str(school_id),
+            object_repr=f'Backup export of school {school_id}',
+            ip_address=request.META.get('REMOTE_ADDR', '')[:45],
+        )
+
         return Response({
             'school_id': school_id,
             'version': '1.0',
@@ -103,15 +144,25 @@ class SchoolViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def restore(self, request):
-        if request.user.role != 'super_admin':
+        if request.user.role not in ('super_admin', 'school_admin'):
             return Response(
-                {'error': 'Only super admins can restore data'},
+                {'error': 'Only super admins and school admins can restore data'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        school_id = request.user.school_id
+        if request.user.role == 'super_admin':
+            payload_school = (
+                request.data.get('school_id') if isinstance(request.data, dict) else None
+            )
+            school_id = payload_school or request.user.school_id
+        else:
+            school_id = request.user.school_id
+
         if not school_id:
-            return Response({'error': 'No school assigned'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'No school assigned. Include school_id in the backup payload.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         confirm = request.data.get('confirm', False)
         if not confirm:
