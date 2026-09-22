@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.db import transaction
 from apps.mixins import SchoolFilterMixin
 from apps.accounts.models import User, StudentAccessCode
+from apps.staff.permissions import IsSchoolAdminRole
 from .serializers import StudentSerializer
 import secrets
 import string
@@ -12,6 +13,12 @@ import string
 class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = User.objects.filter(role='student').select_related('student_profile__class_group').all()
     serializer_class = StudentSerializer
+
+    def get_permissions(self):
+        admin_only = {'promote', 'bulk_create_accounts', 'import_csv', 'reset_password'}
+        if self.action in admin_only:
+            return [IsSchoolAdminRole()]
+        return super().get_permissions()
 
     def get_queryset(self):
         qs = super().get_queryset().filter(role='student')

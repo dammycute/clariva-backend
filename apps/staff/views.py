@@ -9,6 +9,7 @@ from apps.mixins import SchoolFilterMixin
 from apps.accounts.models import User
 from .models import TeacherProfile, StaffProfile
 from .serializers import StaffSerializer
+from .permissions import IsSchoolAdminRole
 
 
 class StaffViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
@@ -16,6 +17,12 @@ class StaffViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         role__in=('principal', 'teacher', 'bursary', 'school_admin', 'admin_officer')
     ).select_related('teacher_profile', 'staff_profile').all()
     serializer_class = StaffSerializer
+
+    def get_permissions(self):
+        admin_only = {'create_account', 'import_csv'}
+        if self.action in admin_only:
+            return [IsSchoolAdminRole()]
+        return super().get_permissions()
 
     def get_queryset(self):
         qs = super().get_queryset().filter(
