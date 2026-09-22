@@ -183,12 +183,20 @@ class SchoolViewSet(viewsets.ModelViewSet):
         if isinstance(raw_data, str):
             raw_data = json.loads(raw_data)
 
-        ALLOWED_MODELS = {
-            'accounts.User', 'classes.Class', 'staff.TeacherProfile',
-            'staff.StaffProfile', 'fees.FeeItem', 'fees.FeeInvoice',
-            'fees.FeeInvoiceItem', 'attendance.Attendance', 'grades.Grade',
-            'exams.Subject', 'exams.TimeTable', 'exams.ReportCard',
-            'comms.Announcement',
+        RESTORE_FIELDS = {
+            'accounts.User': {'email', 'username', 'first_name', 'last_name', 'phone', 'role', 'is_active', 'school', 'date_of_birth', 'gender', 'lga_of_origin', 'state_of_origin'},
+            'classes.Class': {'name', 'year_group', 'arm', 'academic_year', 'school'},
+            'staff.TeacherProfile': {'user', 'school', 'status', 'qualification', 'specialization'},
+            'staff.StaffProfile': {'user', 'school', 'department', 'position'},
+            'fees.FeeItem': {'name', 'amount', 'arm', 'term', 'academic_year', 'school'},
+            'fees.FeeInvoice': {'student', 'term', 'academic_year', 'amount_due', 'amount_paid', 'school'},
+            'fees.FeeInvoiceItem': {'invoice', 'fee_item', 'amount_due', 'amount_paid'},
+            'attendance.Attendance': {'student', 'date', 'status', 'remark', 'school'},
+            'grades.Grade': {'student', 'subject', 'term', 'academic_year', 'ca1', 'ca2', 'exam', 'assignment', 'school'},
+            'exams.Subject': {'name', 'code', 'year_group', 'teacher', 'school'},
+            'exams.TimeTable': {'class_group', 'term', 'academic_year', 'school', 'is_published'},
+            'exams.ReportCard': {'student', 'term', 'academic_year', 'grades', 'total_score', 'total_possible', 'average', 'school'},
+            'comms.Announcement': {'title', 'body', 'target_role', 'school'},
         }
 
         if isinstance(raw_data, dict):
@@ -198,38 +206,58 @@ class SchoolViewSet(viewsets.ModelViewSet):
         else:
             return Response({'error': 'Invalid data format'}, status=status.HTTP_400_BAD_REQUEST)
 
-        for item in items:
-            if not isinstance(item, dict) or 'model' not in item:
-                return Response(
-                    {'error': 'Invalid serialization format — expected Django serialized objects'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if item['model'] not in ALLOWED_MODELS:
-                return Response(
-                    {'error': f'Model "{item["model"]}" is not allowed for restore'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        restored_count = 0
+        errors = []
 
-            fields = item.get('fields', {})
-            if 'is_superuser' in fields and fields['is_superuser']:
-                return Response(
-                    {'error': 'Cannot restore superuser accounts'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+        for item in items:
+            if not isinstance(item, dict) or 'model' not in item or 'fields' not in item:
+                errors.append('Invalid item format — expected {model, fields}')
+                continue
+
+            model_label = item['model']
+            if model_label not in RESTORE_FIELDS:
+                errors.append(f'Model "{model_label}" is not allowed for restore')
+                continue
+
+            fields = item['fields']
+            allowed = RESTORE_FIELDS[model_label]
+
+            if fields.get('is_superuser'):
+                errors.append(f'Cannot restore superuser accounts')
+                continue
 
             item_school = fields.get('school') or fields.get('school_id')
             if item_school and str(item_school) != str(school_id):
-                return Response(
-                    {'error': f'Data belongs to school {item_school}, not your school {school_id}'},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+                errors.append(f'Data belongs to school {item_school}, not your school {school_id}')
+                continue
 
-        buf = StringIO(json.dumps(raw_data))
+            safe_fields = {k: v for k, v in fields.items() if k in allowed}
+            safe_fields['school_id'] = school_id
+
+            try:
+                model = self._resolve_model(model_label)
+                if model is None:
+                    errors.append(f'Could not resolve model "{model_label}"')
+                    continue
+                model.objects.create(**safe_fields)
+                restored_count += 1
+            except Exception as e:
+                errors.append(f'{model_label}: {str(e)}')
+
+        return Response({
+            'restored': restored_count > 0,
+            'items_processed': restored_count,
+            'errors': errors,
+        }, status=status.HTTP_200_OK if restored_count > 0 and not errors else status.HTTP_400_BAD_REQUEST)
+
+    @staticmethod
+    def _resolve_model(model_label):
+        from django.apps import apps
         try:
-            call_command('loaddata', stdin=buf, verbosity=0)
-            return Response({'restored': True, 'items_processed': len(raw_data)})
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            app_label, model_name = model_label.split('.')
+            return apps.get_model(app_label, model_name)
+        except (ValueError, LookupError):
+            return None
 
 
 @api_view(['GET'])

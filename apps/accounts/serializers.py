@@ -26,21 +26,56 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class OnboardSerializer(serializers.ModelSerializer):
-    """Public endpoint for new school registration. Only allows school_admin role."""
+    """Public endpoint for new school registration. Creates user + school atomically."""
     password = serializers.CharField(write_only=True, min_length=8)
     username = serializers.CharField(required=False)
     email = serializers.EmailField(required=True)
+    school_name = serializers.CharField(max_length=255, write_only=True)
+    school_subdomain = serializers.CharField(max_length=50, write_only=True)
+    school_type = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
+    school_address = serializers.CharField(max_length=500, write_only=True, required=False, allow_blank=True)
+    school_state = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
+    school_lga = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone')
+        fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone',
+                  'school_name', 'school_subdomain', 'school_type', 'school_address',
+                  'school_state', 'school_lga')
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('A user with this email already exists.')
         return value
 
+    def validate_school_subdomain(self, value):
+        from apps.schools.models import School
+        slug = value.lower().strip()
+        if School.objects.filter(subdomain=slug).exists():
+            raise serializers.ValidationError('This subdomain is already taken.')
+        return slug
+
     def create(self, validated_data):
+        from apps.schools.models import School
+        from django.utils import timezone
+        from datetime import timedelta
+
+        school_data = {
+            'name': validated_data.pop('school_name'),
+            'subdomain': validated_data.pop('school_subdomain'),
+            'school_type': validated_data.pop('school_type', '') or '',
+            'address': validated_data.pop('school_address', '') or '',
+            'state': validated_data.pop('school_state', '') or '',
+            'lga': validated_data.pop('school_lga', '') or '',
+            'proprietor_name': f"{validated_data.get('first_name', '')} {validated_data.get('last_name', '')}".strip(),
+            'proprietor_phone': validated_data.get('phone', '') or '',
+            'status': 'active',
+            'plan': 'trial',
+            'trial_ends_at': timezone.now() + timedelta(days=30),
+        }
+
+        school = School.objects.create(**school_data)
+
         password = validated_data.pop('password')
         username = validated_data.pop('username', None) or validated_data.get('email', '').split('@')[0]
         base = username
@@ -50,9 +85,11 @@ class OnboardSerializer(serializers.ModelSerializer):
             counter += 1
         validated_data['username'] = username
         validated_data['role'] = 'school_admin'
+        validated_data['school'] = school
         user = User(**validated_data)
         user.set_password(password)
         user.save()
+
         return user
 
 
@@ -77,8 +114,17 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
             caller_role = request.user.role
             if value == 'super_admin' and caller_role != 'super_admin':
                 raise serializers.ValidationError('Only super_admin can create super_admin accounts.')
-            if value == 'school_admin' and caller_role not in ('super_admin', 'school_admin'):
-                raise serializers.ValidationError('Insufficient permissions to create this role.')
+            if value == 'school_admin' and caller_role != 'super_admin':
+                raise serializers.ValidationError('Only super_admin can create school_admin accounts.')
+            if caller_role == 'school_admin' and value not in ('teacher', 'student', 'parent', 'bursary'):
+                raise serializers.ValidationError('School admins can only create teacher, student, parent, or bursary accounts.')
+        return value
+
+    def validate_school(self, value):
+        request = self.context.get('request')
+        if request and request.user and request.user.role == 'school_admin':
+            if value and value.pk != request.user.school_id:
+                raise serializers.ValidationError('You can only create accounts in your own school.')
         return value
 
     def create(self, validated_data):
