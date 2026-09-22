@@ -168,6 +168,7 @@ count*
 dedup_grades*
 seed*
 .env*
+!.env.example
 
 gen_seed*
 
