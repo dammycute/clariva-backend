@@ -120,9 +120,13 @@ class SchoolViewSet(viewsets.ModelViewSet):
         backup_data = {}
         counts = {}
         for name, (model,) in models_to_backup.items():
-            qs = model.objects.filter(school_id=school_id)
-            counts[name] = qs.count()
-            backup_data[name] = dj_serializers.serialize('json', qs)
+            if 'school_id' in [f.name for f in model._meta.get_fields()]:
+                qs = model.objects.filter(school_id=school_id)
+                counts[name] = qs.count()
+                backup_data[name] = dj_serializers.serialize('json', qs)
+            else:
+                counts[name] = 0
+                backup_data[name] = '[]'
 
         ActivityLog.objects.create(
             school_id=school_id,

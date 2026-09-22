@@ -354,7 +354,7 @@ class CBTStartSubmitTest(TestCase):
     def setUp(self):
         from django.contrib.auth import get_user_model
         from apps.schools.models import School
-        from apps.students.models import Student
+        from apps.students.models import StudentProfile
         from apps.classes.models import Class
 
         self.client = APIClient()
@@ -367,10 +367,9 @@ class CBTStartSubmitTest(TestCase):
             school=self.school, role='student',
         )
         cls = Class.objects.create(school=self.school, name='SS1A', year_group='SS1', arm='A')
-        self.student = Student.objects.create(
+        self.student = StudentProfile.objects.create(
             school=self.school, user=self.student_user,
-            admission_no='STU001', full_name='Student One',
-            class_group=cls, status='active',
+            admission_no='STU001', class_group=cls, student_status='active',
         )
 
         # Admin user for setup
@@ -523,7 +522,7 @@ class CBTStartSubmitTest(TestCase):
     def test_submit_wrong_user(self):
         # Another student tries to submit someone else's session
         from django.contrib.auth import get_user_model
-        from apps.students.models import Student
+        from apps.students.models import StudentProfile
         from apps.classes.models import Class
 
         other_user = get_user_model().objects.create_user(
@@ -531,10 +530,9 @@ class CBTStartSubmitTest(TestCase):
             school=self.school, role='student',
         )
         cls = Class.objects.get(school=self.school)
-        Student.objects.create(
+        StudentProfile.objects.create(
             school=self.school, user=other_user,
-            admission_no='STU002', full_name='Student Two',
-            class_group=cls, status='active',
+            admission_no='STU002', class_group=cls, student_status='active',
         )
 
         self.client.force_authenticate(user=self.student_user)
