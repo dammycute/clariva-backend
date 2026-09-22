@@ -1,6 +1,7 @@
 from rest_framework import viewsets, status, permissions
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes, throttle_scope
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from django.core.cache import cache
 from django.conf import settings
 
@@ -43,6 +44,8 @@ def _verify_otp(phone, otp):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([ScopedRateThrottle])
+@throttle_scope('otp')
 @_rate_limit_ip('portal_lookup')
 def portal_lookup(request):
     admission_no = request.data.get('admission_no', '').strip()
@@ -211,6 +214,8 @@ def portal_lookup(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([ScopedRateThrottle])
+@throttle_scope('otp')
 @_rate_limit_ip('portal_setup_init')
 def portal_setup_initiate(request):
     phone = request.data.get('phone', '').strip()
@@ -256,6 +261,8 @@ def portal_setup_initiate(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([ScopedRateThrottle])
+@throttle_scope('otp')
 @_rate_limit_ip('portal_setup_verify')
 def portal_setup_verify(request):
     phone = request.data.get('phone', '').strip()

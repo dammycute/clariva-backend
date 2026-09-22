@@ -142,6 +142,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'anon': '30/minute',
         'user': '60/minute',
+        'otp': '5/minute',
     },
     'EXCEPTION_HANDLER': 'config.exceptions.custom_exception_handler',
 }
