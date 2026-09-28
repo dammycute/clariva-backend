@@ -72,6 +72,7 @@ class StaffViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                         user=user,
                         school=school,
                         qualification=row.get('qualification', '').strip() or None,
+                        subjects=row.get('subjects', '').strip(),
                         date_joined=row.get('date_joined', '').strip() or None,
                         status='active',
                     )
@@ -81,6 +82,7 @@ class StaffViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                         school=school,
                         designation=row.get('designation', raw_role),
                         qualification=row.get('qualification', '').strip() or None,
+                        subjects=row.get('subjects', '').strip(),
                         date_joined=row.get('date_joined', '').strip() or None,
                         status='active',
                     )

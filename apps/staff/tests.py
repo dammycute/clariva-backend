@@ -1,4 +1,6 @@
 import uuid
+from datetime import date
+
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -235,3 +237,77 @@ class TimetableAuthorizationTests(TestCase):
         self.client.force_authenticate(self.admin)
         resp = self.client.post(f'/api/timetable/timetables/{self.timetable.id}/unpublish/', format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+
+class StaffCreateValidationTests(TestCase):
+    def setUp(self):
+        _thread_local.request = None
+        self.school = School.objects.create(name='Test School', subdomain=f'test{uuid.uuid4().hex[:6]}')
+        self.client = APIClient()
+        self.admin = _make_user('school_admin', self.school)
+
+    def _payload(self, **overrides):
+        payload = {
+            'first_name': 'Jane',
+            'last_name': 'Doe',
+            'user_email': f'jane_{uuid.uuid4().hex[:8]}@test.com',
+            'user_phone': '',
+            'staff_role': 'Teacher',
+            'subjects': 'Math, English',
+            'date_joined': '2024-09-01',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_create_without_username_and_blank_phone(self):
+        self.client.force_authenticate(self.admin)
+        resp = self.client.post('/api/staff/', self._payload(), format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        user = User.objects.get(pk=resp.data['id'])
+        self.assertTrue(user.username.startswith('staff_'))
+        self.assertEqual(user.phone, '')
+
+    def test_create_persists_subjects_and_date_joined(self):
+        self.client.force_authenticate(self.admin)
+        resp = self.client.post('/api/staff/', self._payload(), format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
+        self.assertEqual(resp.data['subjects'], ['Math', 'English'])
+        self.assertEqual(resp.data['date_joined'], date(2024, 9, 1))
+        user = User.objects.get(pk=resp.data['id'])
+        self.assertEqual(user.teacher_profile.subjects, 'Math, English')
+        self.assertEqual(user.teacher_profile.date_joined, date(2024, 9, 1))
+
+    def test_update_persists_contact_and_subjects(self):
+        self.client.force_authenticate(self.admin)
+        resp = self.client.post('/api/staff/', self._payload(), format='json')
+        pk = resp.data['id']
+        new_email = f'changed_{uuid.uuid4().hex[:8]}@test.com'
+        resp2 = self.client.patch(
+            f'/api/staff/{pk}/',
+            {'user_phone': '08012345678', 'user_email': new_email, 'subjects': 'Physics'},
+            format='json',
+        )
+        self.assertEqual(resp2.status_code, status.HTTP_200_OK, resp2.data)
+        user = User.objects.get(pk=pk)
+        self.assertEqual(user.phone, '08012345678')
+        self.assertEqual(user.email, new_email)
+        self.assertEqual(user.teacher_profile.subjects, 'Physics')
+
+    def test_update_duplicate_email_rejected(self):
+        other = _make_user('teacher', self.school)
+        self.client.force_authenticate(self.admin)
+        resp = self.client.post('/api/staff/', self._payload(), format='json')
+        resp2 = self.client.patch(
+            f"/api/staff/{resp.data['id']}/",
+            {'user_email': other.email},
+            format='json',
+        )
+        self.assertEqual(resp2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('user_email', resp2.data)
+
+    def test_create_duplicate_email_rejected(self):
+        first = _make_user('teacher', self.school)
+        self.client.force_authenticate(self.admin)
+        resp = self.client.post('/api/staff/', self._payload(user_email=first.email), format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('user_email', resp.data)
