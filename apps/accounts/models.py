@@ -37,6 +37,9 @@ class User(AbstractUser):
         name = self.get_full_name() or self.username or self.email or 'Unnamed'
         return f'{name} ({self.role})'
 
+    class Meta(AbstractUser.Meta):
+        ordering = ['username']
+
 
 class StudentAccessCode(BaseUUIDModel):
     student = models.OneToOneField(User, on_delete=models.CASCADE, related_name='access_code_link')
