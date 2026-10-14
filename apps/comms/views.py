@@ -1,6 +1,7 @@
 from rest_framework import serializers, viewsets, permissions
 from rest_framework.response import Response
 from apps.mixins import SchoolFilterMixin
+from apps.permissions import STAFF_WRITE_ROLES
 from .models import Announcement, Notification
 
 
@@ -21,6 +22,7 @@ class AnnouncementSerializer(serializers.ModelSerializer):
 class AnnouncementViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Announcement.objects.all()
     serializer_class = AnnouncementSerializer
+    write_roles = STAFF_WRITE_ROLES
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)

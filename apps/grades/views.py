@@ -6,11 +6,13 @@ from .models import Grade
 from .serializers import GradeSerializer
 from .services import GradeService
 from apps.mixins import SchoolFilterMixin
+from apps.permissions import STAFF_WRITE_ROLES
 
 
 class GradeViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Grade.objects.select_related('student', 'subject').all()
     serializer_class = GradeSerializer
+    write_roles = STAFF_WRITE_ROLES
 
     def get_queryset(self):
         qs = super().get_queryset()

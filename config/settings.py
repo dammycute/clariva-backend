@@ -5,7 +5,7 @@ from decouple import config, Csv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config('SECRET_KEY', default=None)
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = config('DEBUG', default=False, cast=bool)
 
 if not SECRET_KEY:
     if DEBUG:
@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     # Third-party
     'rest_framework',
     'corsheaders',
+    'rest_framework_simplejwt.token_blacklist',
     'fernet_fields',
     # Local apps
     'apps.accounts',
@@ -86,6 +87,9 @@ if db_url.startswith('sqlite'):
     DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': BASE_DIR / 'db.sqlite3'}}
 else:
     match = re.match(r'postgres(?:ql)?://(.+):(.+)@(.+):(\d+)/(.+)', db_url)
+    if not match:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured('DATABASE_URL must be sqlite:///... or postgres://user:pass@host:port/name')
     if match:
             DATABASES = {
                 'default': {
@@ -95,12 +99,15 @@ else:
                     'PASSWORD': unquote(match.group(2)),
                     'HOST': match.group(3),
                     'PORT': match.group(4),
-                    'OPTIONS': {'sslmode': config('DB_SSLMODE', default='disable')},
+                    'OPTIONS': {'sslmode': config('DB_SSLMODE', default='prefer' if DEBUG else 'require')},
                 }
             }
 
 AUTH_PASSWORD_VALIDATORS = [
-    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
 LANGUAGE_CODE = 'en-us'
@@ -117,6 +124,18 @@ AUTHENTICATION_BACKENDS = [
     'apps.accounts.auth_backends.EmailAuthBackend',
     'django.contrib.auth.backends.ModelBackend',
 ]
+
+# Production hardening
+if not DEBUG:
+    SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=True, cast=bool)
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
 
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
@@ -143,7 +162,10 @@ REST_FRAMEWORK = {
         'anon': '30/minute',
         'user': '60/minute',
         'otp': '5/minute',
+        'auth': '10/minute',
     },
+    # Number of trusted reverse proxies, so throttles see the real client IP.
+    'NUM_PROXIES': config('NUM_PROXIES', default=0, cast=int),
     'EXCEPTION_HANDLER': 'config.exceptions.custom_exception_handler',
 }
 

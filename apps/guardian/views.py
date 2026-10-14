@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes, throttle_scope
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import BaseThrottle, ScopedRateThrottle
 from django.core.cache import cache
 from django.conf import settings
 
@@ -13,7 +13,7 @@ from .models import GuardianStudent
 def _rate_limit_ip(key_prefix, max_requests=10, window=60):
     def decorator(view_fn):
         def wrapper(request, *args, **kwargs):
-            ip = request.META.get('REMOTE_ADDR', 'unknown')
+            ip = BaseThrottle().get_ident(request)  # honours NUM_PROXIES
             cache_key = f'{key_prefix}:{ip}'
             count = cache.get(cache_key, 0)
             if count >= max_requests:

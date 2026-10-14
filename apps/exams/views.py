@@ -23,6 +23,8 @@ from .parsers import parse_question_docx
 
 W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 
+from apps.permissions import STAFF_WRITE_ROLES
+
 STAFF_ROLES = {'school_admin', 'admin_officer', 'principal', 'teacher', 'bursary', 'super_admin'}
 
 class IsStaffOrReadOnly(permissions.IsAuthenticated):
@@ -60,6 +62,7 @@ class SubjectSerializer(serializers.ModelSerializer):
 class SubjectViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
+    write_roles = STAFF_WRITE_ROLES
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -99,6 +102,7 @@ class StudentSubjectSerializer(serializers.ModelSerializer):
 class StudentSubjectViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = StudentSubject.objects.select_related('student', 'subject').all()
     serializer_class = StudentSubjectSerializer
+    write_roles = STAFF_WRITE_ROLES
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -529,6 +533,8 @@ class QuestionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        if self.request.user.role in ('student', 'parent'):
+            return qs.none()  # answer keys must not reach students
         exam_id = self.request.query_params.get('exam')
         if exam_id:
             qs = qs.filter(exam_id=exam_id)
@@ -567,6 +573,13 @@ class ExamSessionSerializer(serializers.ModelSerializer):
 class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = ExamSession.objects.select_related('student').all()
     serializer_class = ExamSessionSerializer
+    write_roles = STAFF_WRITE_ROLES
+
+    def get_permissions(self):
+        # Students submit their own session; all other writes are staff-only.
+        if self.action == 'submit':
+            return [permissions.IsAuthenticated()]
+        return super().get_permissions()
 
     def get_queryset(self):
         qs = super().get_queryset()

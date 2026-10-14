@@ -547,8 +547,8 @@ class CBTStartSubmitTest(TestCase):
 
     # ── Perform create ────────────────────────────────────────────
 
-    def test_direct_session_create_returns_405(self):
+    def test_direct_session_create_forbidden_for_student(self):
         self.client.force_authenticate(user=self.student_user)
         url = reverse('examsession-list')
         resp = self.client.post(url, {'exam': self.exam.pk}, format='json')
-        self.assertEqual(resp.status_code, 405)
+        self.assertEqual(resp.status_code, 403)

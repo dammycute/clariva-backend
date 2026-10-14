@@ -1,3 +1,4 @@
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User
@@ -27,7 +28,7 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class OnboardSerializer(serializers.ModelSerializer):
     """Public endpoint for new school registration. Creates user + school atomically."""
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(write_only=True, min_length=8, validators=[validate_password])
     username = serializers.CharField(required=False)
     email = serializers.EmailField(required=True)
     school_name = serializers.CharField(max_length=255, write_only=True)
@@ -95,7 +96,7 @@ class OnboardSerializer(serializers.ModelSerializer):
 
 class AdminCreateUserSerializer(serializers.ModelSerializer):
     """Admin-only endpoint for creating users with any role."""
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(write_only=True, min_length=8, validators=[validate_password])
     username = serializers.CharField(required=False)
     email = serializers.EmailField(required=True)
 
@@ -142,6 +143,13 @@ class AdminCreateUserSerializer(serializers.ModelSerializer):
         return user
 
 
+class SelfUpdateSerializer(serializers.ModelSerializer):
+    """Fields a user may change on their own account."""
+    class Meta:
+        model = User
+        fields = ('first_name', 'last_name', 'phone', 'avatar_url', 'photo_url')
+
+
 class UserSerializer(serializers.ModelSerializer):
     class_name = serializers.SerializerMethodField()
     admission_no = serializers.SerializerMethodField()
@@ -161,7 +169,7 @@ class UserSerializer(serializers.ModelSerializer):
             'admission_no', 'class_group', 'class_name', 'guardian_name',
             'guardian_phone', 'guardian_email', 'student_status', 'academic_year',
         )
-        read_only_fields = ('school_id',)
+        read_only_fields = ('id', 'username', 'email', 'role', 'is_active', 'school', 'school_id')
 
     def get_class_name(self, obj):
         sp = getattr(obj, 'student_profile', None)
