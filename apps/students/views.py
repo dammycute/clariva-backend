@@ -27,6 +27,8 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         # Student self-access
         if user.role == 'student':
             return qs.filter(id=user.id)
+        if user.role == 'parent':
+            return qs.none()
 
         # Teacher scoping
         if user.role == 'teacher':

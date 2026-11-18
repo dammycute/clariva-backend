@@ -19,7 +19,11 @@ def log_activity(sender, instance, action, request=None, **kwargs):
     user = getattr(request, 'user', None) if request else None
     if not user or not user.is_authenticated:
         return
+    if not user.__class__.objects.filter(pk=user.pk).exists():
+        return
     school = getattr(user, 'school', None)
+    if school and not school.__class__.objects.filter(pk=school.pk).exists():
+        school = None
     ActivityLog.objects.create(
         school=school,
         user=user,

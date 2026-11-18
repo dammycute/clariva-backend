@@ -2,11 +2,13 @@ from rest_framework import viewsets
 from .models import Attendance
 from .serializers import AttendanceSerializer
 from apps.mixins import SchoolFilterMixin
+from apps.permissions import STAFF_WRITE_ROLES
 
 
 class AttendanceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = Attendance.objects.select_related('student').all()
     serializer_class = AttendanceSerializer
+    write_roles = STAFF_WRITE_ROLES
 
     def get_queryset(self):
         qs = super().get_queryset()

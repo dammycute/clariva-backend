@@ -1,8 +1,10 @@
 from django.db import models
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from apps.audit.models import ActivityLog
 from apps.schools.models import School
+from apps.permissions import RoleWritePermission
 
 
 class CustomPagination(PageNumberPagination):
@@ -12,7 +14,12 @@ class CustomPagination(PageNumberPagination):
 
 
 class SchoolFilterMixin:
-    """Auto-filter queryset by request.user.school and set school on create."""
+    """Auto-filter queryset by request.user.school and set school on create.
+
+    Also gates writes by role via `write_roles` (default: admin roles).
+    """
+
+    permission_classes = (IsAuthenticated, RoleWritePermission)
 
     def get_queryset(self):
         user = self.request.user

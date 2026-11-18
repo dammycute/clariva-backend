@@ -1,5 +1,6 @@
 from rest_framework import serializers, viewsets
 from apps.mixins import SchoolFilterMixin
+from apps.permissions import ADMIN_ROLES
 from .models import ActivityLog
 
 class ActivityLogSerializer(serializers.ModelSerializer):
@@ -18,6 +19,7 @@ class ActivityLogSerializer(serializers.ModelSerializer):
 class ActivityLogViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
     queryset = ActivityLog.objects.select_related('user', 'school').all()
     serializer_class = ActivityLogSerializer
+    read_roles = ADMIN_ROLES
 
     def get_queryset(self):
         qs = super().get_queryset()
