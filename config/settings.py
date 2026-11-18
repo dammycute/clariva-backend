@@ -18,6 +18,14 @@ FERNET_KEYS = config('FERNET_KEYS', default=None)
 if FERNET_KEYS:
     FERNET_KEYS = [k.strip() for k in FERNET_KEYS.split(',') if k.strip()]
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
+# A host is a bare name like api.example.com. Forgive a pasted URL: drop the scheme and any path.
+ALLOWED_HOSTS = [h.split('://', 1)[-1].split('/', 1)[0] for h in ALLOWED_HOSTS if h]
+# Vercel sets these on every deployment (from Vercel itself, not from the request):
+# the deployment's own host, the branch host, and the project's production host.
+for _name in ('VERCEL_URL', 'VERCEL_BRANCH_URL', 'VERCEL_PROJECT_PRODUCTION_URL'):
+    _host = config(_name, default='')
+    if _host and _host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS = [*ALLOWED_HOSTS, _host]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -100,8 +108,23 @@ else:
                     'HOST': match.group(3),
                     'PORT': match.group(4),
                     'OPTIONS': {'sslmode': config('DB_SSLMODE', default='prefer' if DEBUG else 'require')},
+                    # Set DB_POOLED=true when connecting through a transaction pooler
+                    # (for example Supabase port 6543), which cannot keep server-side cursors.
+                    'DISABLE_SERVER_SIDE_CURSORS': config('DB_POOLED', default=False, cast=bool),
                 }
             }
+
+# Cache. The portal OTP codes and the rate-limit counters live here. The default
+# in-memory cache is per process, so on serverless hosts (Vercel) or with several
+# workers set CACHE_BACKEND=db to share them through the database instead.
+if config('CACHE_BACKEND', default='locmem') == 'db':
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.db.DatabaseCache', 'LOCATION': 'django_cache'}}
+else:
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+
+# The Django admin site needs static files, which serverless hosts do not serve.
+# It is on in development and off in production unless ENABLE_ADMIN=true.
+ENABLE_ADMIN = config('ENABLE_ADMIN', default=DEBUG, cast=bool)
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},

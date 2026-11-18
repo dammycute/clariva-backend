@@ -1,9 +1,9 @@
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 from .views import health_check
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
     path('health/', health_check, name='health-check'),
     path('api/auth/', include('apps.accounts.urls')),
     path('api/schools/', include('apps.schools.urls')),
@@ -21,3 +21,6 @@ urlpatterns = [
     path('api/audit/', include('apps.audit.urls')),
     path('api/portal/', include('apps.guardian.urls')),
 ]
+
+if settings.ENABLE_ADMIN:
+    urlpatterns.insert(0, path('admin/', admin.site.urls))
