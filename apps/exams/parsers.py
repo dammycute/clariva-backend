@@ -178,6 +178,7 @@ def _parse_single_question(qlines):
     difficulty = 'medium'
     mark = 1
     topic = None
+    accepted = []
 
     for line in qlines:
         line = line.strip()
@@ -200,6 +201,11 @@ def _parse_single_question(qlines):
         # ANSWER
         if upper.startswith('ANSWER:'):
             correct_answer = _after_colon(line)
+            continue
+
+        # ACCEPT: other answers that also count as right, separated by |
+        if upper.startswith('ACCEPT:'):
+            accepted = [a.strip() for a in _after_colon(line).split('|') if a.strip()]
             continue
 
         # DIFFICULTY
@@ -257,6 +263,7 @@ def _parse_single_question(qlines):
         'question_type': question_type,
         'options': options if options else None,
         'correct_answer': correct_answer,
+        'accepted_answers': accepted if (accepted and question_type == 'short_answer') else None,
         'difficulty': difficulty,
         'mark': mark,
         'topic': topic,

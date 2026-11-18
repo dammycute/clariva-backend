@@ -55,11 +55,25 @@ class Exam(BaseUUIDModel):
     shuffle_questions = models.BooleanField(default=False)
     shuffle_options = models.BooleanField(default=False)
     time_limit_enforced = models.BooleanField(default=True)
+    # Classes this exam is for. `class_group` is the older single-class field, kept so
+    # existing data and screens keep working; `classes` is what eligibility uses.
+    classes = models.ManyToManyField('classes.Class', blank=True, related_name='cbt_exams')
+    # immediate: the student sees the score on submit. on_release: scores and grades wait
+    # until a teacher presses Release.
+    release_mode = models.CharField(max_length=20, default='immediate', choices=[
+        ('immediate', 'Show the score right after submit'),
+        ('on_release', 'Hold results until released'),
+    ])
+    results_released = models.BooleanField(default=False)
+    results_released_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    STATUS_CHOICES = ('draft', 'published', 'closed', 'archived')
 
 class Question(BaseUUIDModel):
     school = models.ForeignKey('schools.School', on_delete=models.CASCADE)
-    exam = models.ForeignKey(Exam, on_delete=models.SET_NULL, null=True, blank=True)
+    exam = models.ForeignKey(Exam, on_delete=models.CASCADE, null=True, blank=True)
     body = models.TextField()
     image_url = models.URLField(null=True, blank=True)
     question_type = models.CharField(max_length=20, choices=[
@@ -67,6 +81,8 @@ class Question(BaseUUIDModel):
     ])
     options = models.JSONField(null=True, blank=True)
     correct_answer = EncryptedTextField()
+    # Other answers that also count as right (short answer), for example ["x = 3", "x=3"].
+    accepted_answers = models.JSONField(null=True, blank=True)
     topic = models.CharField(max_length=255, null=True, blank=True)
     difficulty = models.CharField(max_length=10, default='medium')
     mark = models.IntegerField(default=1)
@@ -176,8 +192,26 @@ class ExamSession(BaseUUIDModel):
     question_order = models.JSONField(null=True, blank=True)
     late_submission = models.BooleanField(default=False)
     status = models.CharField(max_length=20, default='pending')
+    # The server's own end time for this attempt: the shorter of start + duration and the exam end time.
+    deadline = models.DateTimeField(null=True, blank=True)
+    last_saved_at = models.DateTimeField(null=True, blank=True)
+    # True when the server submitted the attempt (time ran out, or the exam was closed).
+    auto_submitted = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['exam', 'student'], name='unique_exam_student'),
+        ]
+
+
+class ExamAnswer(BaseUUIDModel):
+    """One saved answer. Saved as the student types, so a crash does not lose the exam."""
+    session = models.ForeignKey(ExamSession, on_delete=models.CASCADE, related_name='saved_answers')
+    question = models.ForeignKey(Question, on_delete=models.CASCADE)
+    answer = models.TextField(blank=True, default='')
+    saved_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['session', 'question'], name='unique_answer_per_question'),
         ]

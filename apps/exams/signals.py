@@ -17,17 +17,18 @@ def auto_create_draft_exams(sender, instance, created, **kwargs):
         return
     if Exam.objects.filter(subject=instance).exists():
         return
-    default_class = instance.school.class_set.filter(year_group=instance.year_group).first()
+    # Drafts only. They are not given a class: a teacher or admin chooses the classes
+    # before publishing, so an exam is never opened to a class by guesswork.
     for comp, comp_label in COMPONENTS:
         Exam.objects.create(
             school=instance.school,
             title=f'{instance.name} {comp_label}',
             subject=instance,
-            class_group=default_class,
             duration_mins=30,
             pass_mark=40,
             status='draft',
             component=comp,
+            release_mode='on_release',
             term=instance.school.current_term,
             academic_year=instance.school.current_academic_year,
         )
