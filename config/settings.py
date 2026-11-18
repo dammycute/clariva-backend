@@ -18,10 +18,14 @@ FERNET_KEYS = config('FERNET_KEYS', default=None)
 if FERNET_KEYS:
     FERNET_KEYS = [k.strip() for k in FERNET_KEYS.split(',') if k.strip()]
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
-# Vercel sets VERCEL_URL (the deployment's own host name) on every deployment.
-_vercel_url = config('VERCEL_URL', default='')
-if _vercel_url:
-    ALLOWED_HOSTS = [*ALLOWED_HOSTS, _vercel_url]
+# A host is a bare name like api.example.com. Forgive a pasted URL: drop the scheme and any path.
+ALLOWED_HOSTS = [h.split('://', 1)[-1].split('/', 1)[0] for h in ALLOWED_HOSTS if h]
+# Vercel sets these on every deployment (from Vercel itself, not from the request):
+# the deployment's own host, the branch host, and the project's production host.
+for _name in ('VERCEL_URL', 'VERCEL_BRANCH_URL', 'VERCEL_PROJECT_PRODUCTION_URL'):
+    _host = config(_name, default='')
+    if _host and _host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS = [*ALLOWED_HOSTS, _host]
 
 INSTALLED_APPS = [
     'django.contrib.admin',
