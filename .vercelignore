@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+db.sqlite3
+*.sqlite3
+.env
+seed_locations.sql
+Clariva_*.xlsx
