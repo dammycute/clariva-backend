@@ -15,8 +15,8 @@ CLOSE_GRACE_SECONDS = 60
 # A manual Submit is still accepted this long after the deadline, but flagged as late.
 LATE_GRACE_MINUTES = 5
 
-CA_DEFAULT_MAX = 30
-EXAM_DEFAULT_MAX = 100
+CA_DEFAULT_MAX = 10
+EXAM_DEFAULT_MAX = 70
 
 
 # ── Who may sit an exam ──────────────────────────────────────────
