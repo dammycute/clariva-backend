@@ -47,6 +47,8 @@ class FeeInvoiceItemSerializer(serializers.ModelSerializer):
 class FeeInvoiceSerializer(serializers.ModelSerializer):
     student_name = serializers.SerializerMethodField()
     fee_name = serializers.SerializerMethodField()
+    class_group = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
     items = FeeInvoiceItemSerializer(many=True, required=False)
 
     class Meta:
@@ -69,6 +71,18 @@ class FeeInvoiceSerializer(serializers.ModelSerializer):
 
     def get_fee_name(self, obj):
         return obj.fee_item.name if obj.fee_item else None
+
+    def _class(self, obj):
+        profile = getattr(obj.student, 'student_profile', None) if obj.student else None
+        return profile.class_group if profile else None
+
+    def get_class_group(self, obj):
+        cls = self._class(obj)
+        return str(cls.pk) if cls else None
+
+    def get_class_name(self, obj):
+        cls = self._class(obj)
+        return cls.name if cls else None
 
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])

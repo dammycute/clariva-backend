@@ -25,7 +25,9 @@ class AnnouncementViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     write_roles = STAFF_WRITE_ROLES
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        # `school` is read-only on the serializer, so it must be set here or the insert fails.
+        instance = serializer.save(school=self.request.user.school, created_by=self.request.user)
+        self._log_activity(instance, 'created')
 
 
 class NotificationSerializer(serializers.ModelSerializer):

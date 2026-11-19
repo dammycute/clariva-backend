@@ -22,7 +22,7 @@ class FeeRolePermission(permissions.IsAuthenticated):
 
 
 class FeeItemViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = FeeItem.objects.all()
+    queryset = FeeItem.objects.order_by('name', 'id')
     serializer_class = FeeItemSerializer
     permission_classes = (FeeRolePermission,)
 
@@ -66,7 +66,9 @@ class FeeItemViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
 
 class FeeInvoiceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
-    queryset = FeeInvoice.objects.select_related('student', 'fee_item').prefetch_related('items__fee_item').all()
+    queryset = FeeInvoice.objects.select_related(
+        'student', 'fee_item', 'student__student_profile__class_group',
+    ).prefetch_related('items__fee_item').order_by('-created_at', 'id')   # fixed order, so pages never overlap
     serializer_class = FeeInvoiceSerializer
     permission_classes = (FeeRolePermission,)
 
@@ -74,6 +76,9 @@ class FeeInvoiceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         qs = super().get_queryset()
         student_id = self.request.query_params.get('student_id')
         status = self.request.query_params.get('status')
+        class_group = self.request.query_params.get('class_group')
+        if class_group:
+            qs = qs.filter(student__student_profile__class_group_id=class_group)
         if student_id:
             qs = qs.filter(student_id=student_id)
         if status:
