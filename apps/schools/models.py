@@ -19,17 +19,17 @@ DEFAULT_GRADE_BOUNDARIES = [
 ]
 
 PREDEFINED_COMPONENTS = [
-    {"key": "ca1", "default_label": "CA 1", "default_max": 30},
-    {"key": "ca2", "default_label": "CA 2", "default_max": 30},
-    {"key": "assignment", "default_label": "Assignment", "default_max": 40},
-    {"key": "exam", "default_label": "Exam", "default_max": 100},
+    {"key": "ca1", "default_label": "CA 1", "default_max": 10},
+    {"key": "ca2", "default_label": "CA 2", "default_max": 10},
+    {"key": "assignment", "default_label": "Assignment", "default_max": 10},
+    {"key": "exam", "default_label": "Exam", "default_max": 70},
 ]
 
 DEFAULT_COMPONENTS = [
-    {"key": "ca1", "label": "CA 1", "max": 30, "enabled": True},
-    {"key": "ca2", "label": "CA 2", "max": 30, "enabled": True},
-    {"key": "assignment", "label": "Assignment", "max": 40, "enabled": True},
-    {"key": "exam", "label": "Exam", "max": 100, "enabled": True},
+    {"key": "ca1", "label": "CA 1", "max": 10, "enabled": True},
+    {"key": "ca2", "label": "CA 2", "max": 10, "enabled": True},
+    {"key": "assignment", "label": "Assignment", "max": 10, "enabled": True},
+    {"key": "exam", "label": "Exam", "max": 70, "enabled": True},
 ]
 
 

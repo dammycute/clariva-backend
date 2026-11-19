@@ -125,6 +125,19 @@ class CBTBase(TestCase):
         return self.client_for(user or self.student).post(reverse('exam-start', kwargs={'pk': (exam or self.exam).pk}))
 
 
+class ShuffleMarkingTest(SimpleTestCase):
+    def test_shuffled_options_still_mark_by_the_option_text(self):
+        from types import SimpleNamespace
+        from apps.exams.marking import is_correct
+        q = SimpleNamespace(question_type='mcq', options=['Abuja', 'Lagos', 'Kano', 'Ibadan'],
+                            correct_answer='A', accepted_answers=None)
+        # The student sees the options in any order, but the answer sent is the option text.
+        self.assertTrue(is_correct(q, 'Abuja'))
+        self.assertFalse(is_correct(q, 'Lagos'))
+        q.correct_answer = 'Kano'            # key stored as text works the same way
+        self.assertTrue(is_correct(q, 'Kano'))
+
+
 class WhoMaySitTest(CBTBase):
 
     def test_student_sees_only_exams_for_their_class(self):
@@ -333,7 +346,7 @@ class HoldAndReleaseTest(CBTBase):
         GradingConfig.objects.all().delete()
         self._submit(self.right)
         self.client_for(self.teacher).post(reverse('exam-release', kwargs={'pk': self.exam.pk}))
-        self.assertEqual(Grade.objects.get(student=self.student).ca1, Decimal('30.00'))
+        self.assertEqual(Grade.objects.get(student=self.student).ca1, Decimal('10.00'))
 
     def test_approved_grade_is_never_overwritten(self):
         Grade.objects.create(school=self.school, student=self.student, subject=self.subject,
