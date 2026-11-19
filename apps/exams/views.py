@@ -286,6 +286,13 @@ class ExamSerializer(serializers.ModelSerializer):
         if start and end and end <= start:
             raise serializers.ValidationError({'end_time': 'The end time must be after the start time.'})
 
+        component = attrs.get('component', getattr(instance, 'component', None))
+        if component in GRADED_COMPONENTS and not (attrs.get('subject') or getattr(instance, 'subject', None)):
+            raise serializers.ValidationError({'subject': 'Choose a subject so the marks can go to the grade book.'})
+        if instance and 'component' in attrs and attrs['component'] != instance.component                 and ExamSession.objects.filter(exam=instance).exists():
+            raise serializers.ValidationError(
+                {'component': 'Students have already started this exam, so what it counts as cannot change.'})
+
         new_status = attrs.get('status', instance.status if instance else 'draft')
         publishing = new_status == 'published' and (instance is None or instance.status != 'published')
         if publishing:
@@ -309,11 +316,22 @@ class ExamSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         if 'release_mode' not in validated_data and validated_data.get('component') in GRADED_COMPONENTS:
             validated_data['release_mode'] = 'on_release'
+        if validated_data.get('component') in GRADED_COMPONENTS:
+            school = self.context['request'].user.school
+            validated_data.setdefault('term', None)
+            validated_data['term'] = validated_data['term'] or school.current_term
+            validated_data['academic_year'] = validated_data.get('academic_year') or school.current_academic_year
         instance = super().create(validated_data)
         self._sync_legacy_class(instance, validated_data)
         return instance
 
     def update(self, instance, validated_data):
+        school = self.context['request'].user.school
+        if validated_data.get('component', instance.component) in GRADED_COMPONENTS:
+            if not (validated_data.get('term') or instance.term):
+                validated_data['term'] = school.current_term
+            if not (validated_data.get('academic_year') or instance.academic_year):
+                validated_data['academic_year'] = school.current_academic_year
         instance = super().update(instance, validated_data)
         self._sync_legacy_class(instance, validated_data)
         return instance
