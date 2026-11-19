@@ -2,10 +2,11 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db import transaction
+from django.db.models import Q
 from apps.mixins import SchoolFilterMixin
 from apps.accounts.models import User, StudentAccessCode
 from apps.staff.permissions import IsSchoolAdminRole
-from .serializers import StudentSerializer
+from .serializers import StudentSerializer, has_login
 import secrets
 import string
 
@@ -118,7 +119,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def create_account(self, request, pk=None):
         student = self.get_object()
-        if student.has_usable_password():
+        if has_login(student):
             return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
         sp = getattr(student, 'student_profile', None)
         identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
@@ -129,7 +130,8 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         student.email = email
         student.set_password(password)
         student.save()
-        return Response({'email': email, 'password': password}, status=status.HTTP_201_CREATED)
+        return Response({'admission_no': identifier, 'email': email, 'password': password},
+                        status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'])
     def bulk_create_accounts(self, request):
@@ -138,8 +140,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             return Response({'error': 'class_id required'}, status=status.HTTP_400_BAD_REQUEST)
         students = User.objects.filter(
             student_profile__class_group_id=class_id, school=request.user.school, role='student',
-            password='',
-        )
+        ).filter(Q(password='') | Q(password__startswith='!'))
         created = []
         for student in students:
             sp = getattr(student, 'student_profile', None)
@@ -151,18 +152,21 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             student.email = email
             student.set_password(password)
             student.save()
-            created.append({'name': student.get_full_name(), 'email': email, 'password': password})
+            created.append({'name': student.get_full_name(), 'admission_no': identifier,
+                            'email': email, 'password': password})
         return Response({'created': created})
 
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
         student = self.get_object()
-        if not student.has_usable_password():
+        if not has_login(student):
             return Response({'error': 'No account exists for this student'}, status=status.HTTP_400_BAD_REQUEST)
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
         student.set_password(password)
         student.save()
-        return Response({'email': student.email, 'password': password})
+        sp = getattr(student, 'student_profile', None)
+        return Response({'admission_no': sp.admission_no if sp else None, 'email': student.email,
+                         'password': password})
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -211,6 +215,6 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         return Response(events[:50])
 
     def perform_create(self, serializer):
-        user = serializer.save(role='student')
-        from apps.students.models import StudentProfile
-        StudentProfile.objects.get_or_create(user=user)
+        user = serializer.save(role='student', school=self.request.user.school)
+        self._log_activity(user, 'created')
+        return user
