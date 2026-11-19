@@ -51,46 +51,60 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def import_csv(self, request):
+        """Create students from CSV text. Admission numbers and usernames are always generated.
+
+        Columns: full_name (or first_name + last_name), gender, guardian_name, guardian_phone,
+        guardian_email, and optionally class (a class name from this school). An admission_no
+        column, if present, is ignored.
+        """
         import csv, io
-        csv_data = request.data.get('csv', '')
-        class_id = request.data.get('class_id')
+        from apps.classes.models import Class
+        from apps.base.encryption import hash_value
+        from apps.students.models import StudentProfile
+        from .serializers import next_admission_no, unique_username
+
+        csv_data = (request.data.get('csv', '') or '').lstrip('﻿')
+        default_class_id = request.data.get('class_id') or None
+        school = request.user.school
+        classes = {c.name.strip().lower(): c for c in Class.objects.filter(school=school)}
+        if default_class_id and not Class.objects.filter(pk=default_class_id, school=school).exists():
+            return Response({'error': 'Choose a class from your school.'}, status=status.HTTP_400_BAD_REQUEST)
+
         reader = csv.DictReader(io.StringIO(csv_data))
-        created, errors = 0, []
-        school = getattr(request.user, 'school', None)
-        for i, row in enumerate(reader, start=2):
-            name = row.get('full_name', '').strip()
+        reader.fieldnames = [(f or '').strip().lower() for f in (reader.fieldnames or [])]
+        created, errors, students = 0, [], []
+        for i, raw in enumerate(reader, start=2):
+            row = {k: (v or '').strip() for k, v in raw.items() if k}
+            name = row.get('full_name') or f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
             if not name:
-                errors.append(f'Row {i}: missing full_name')
+                errors.append(f'Row {i}: missing name (use full_name, or first_name and last_name)')
                 continue
-            name_parts = name.split(' ', 1)
-            first_name = name_parts[0]
-            last_name = name_parts[1] if len(name_parts) > 1 else ''
+            first, _, last = name.partition(' ')
+            class_name = row.get('class', '')
+            cls = classes.get(class_name.lower()) if class_name else None
+            if class_name and not cls:
+                errors.append(f'Row {i}: class "{class_name}" was not found')
+                continue
             try:
-                seq = User.objects.filter(school=school, role='student').count() + 1
-                admission_no = row.get('admission_no', '') or f'CLR/{request.user.school_id}/{seq:05d}'
-                username = f'student.{seq}'
-                user = User.objects.create(
-                    school=school,
-                    username=username,
-                    first_name=first_name,
-                    last_name=last_name,
-                    gender=row.get('gender', '').strip() or None,
-                    role='student',
-                )
-                from apps.students.models import StudentProfile
-                StudentProfile.objects.create(
-                    user=user,
-                    admission_no=admission_no,
-                    class_group_id=class_id or None,
-                    guardian_name=row.get('guardian_name', '').strip() or None,
-                    guardian_phone=row.get('guardian_phone', '').strip() or None,
-                    guardian_email=row.get('guardian_email', '').strip() or None,
-                    student_status='active',
-                )
+                with transaction.atomic():
+                    adm = next_admission_no(school)
+                    user = User(school=school, username=unique_username(adm), first_name=first,
+                                last_name=last.strip(), gender=row.get('gender') or None, role='student')
+                    user.set_unusable_password()
+                    user.save()
+                    StudentProfile.objects.create(
+                        user=user, school=school, admission_no=adm, admission_no_hash=hash_value(adm),
+                        class_group_id=cls.id if cls else default_class_id,
+                        guardian_name=row.get('guardian_name') or None,
+                        guardian_phone=row.get('guardian_phone') or None,
+                        guardian_email=row.get('guardian_email') or None,
+                        student_status='active',
+                    )
                 created += 1
+                students.append({'name': name, 'admission_no': adm})
             except Exception as e:
-                errors.append(f'Row {i}: {str(e)}')
-        return Response({'created': created, 'errors': errors})
+                errors.append(f'Row {i}: {e}')
+        return Response({'created': created, 'errors': errors, 'students': students})
 
     @action(detail=False, methods=['post'])
     def promote(self, request):

@@ -90,3 +90,26 @@ class StudentAccountsTest(TestCase):
         res = APIClient().post('/api/auth/student-login/',
                                {'student_id': row['email'], 'password': row['password']}, format='json')
         self.assertEqual(res.status_code, 200, res.content)
+
+    def test_import_ignores_admission_no_and_generates_it(self):
+        csv_text = ('full_name,admission_no,gender,class\n'
+                    'Femi Ola,SHOULD-BE-IGNORED,Male,JSS1A\n'
+                    'Ngozi Eze,,Female,JSS1A\n'
+                    'Bad Row,,Male,NOCLASS\n')
+        res = self.api.post('/api/students/import_csv/', {'csv': csv_text}, format='json')
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body['created'], 2)
+        self.assertEqual(len(body['errors']), 1)
+        numbers = [s['admission_no'] for s in body['students']]
+        self.assertEqual(len(set(numbers)), 2)
+        self.assertTrue(all(n.startswith('CLR/') for n in numbers))
+        self.assertFalse(StudentProfile.objects.filter(admission_no='SHOULD-BE-IGNORED').exists())
+        self.assertEqual(StudentProfile.objects.filter(class_group=self.cls).count(), 3)   # Ada + 2 imported
+
+    def test_import_after_a_delete_does_not_clash(self):
+        self.api.post('/api/students/import_csv/', {'csv': 'full_name\nOne Two\nThree Four\n'}, format='json')
+        User.objects.filter(first_name='One').delete()
+        res = self.api.post('/api/students/import_csv/', {'csv': 'full_name\nFive Six\n'}, format='json')
+        self.assertEqual(res.json()['created'], 1, res.content)
+        self.assertEqual(res.json()['errors'], [])
