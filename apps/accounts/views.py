@@ -91,17 +91,15 @@ class StudentLoginView(generics.GenericAPIView):
             return Response({'detail': 'Student ID is required'}, status=status.HTTP_400_BAD_REQUEST)
         if not password:
             return Response({'detail': 'Password is required'}, status=status.HTTP_400_BAD_REQUEST)
-        if not school_id:
-            return Response({'detail': 'School ID is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            admission_hash = hash_value(student_id)
-            user = User.objects.get(
-                student_profile__admission_no_hash=admission_hash,
-                role='student',
-                school_id=school_id,
-            )
-        except User.DoesNotExist:
+        # Admission numbers are unique across the system, so the school is optional.
+        # The generated login email or username also works.
+        students = User.objects.filter(role='student')
+        if school_id:
+            students = students.filter(school_id=school_id)
+        user = (students.filter(student_profile__admission_no_hash__in=[hash_value(student_id), hash_value(student_id.upper())]).first()
+                or students.filter(email__iexact=student_id).first()
+                or students.filter(username__iexact=student_id).first())
+        if user is None:
             return Response({'detail': INVALID_STUDENT_LOGIN}, status=status.HTTP_400_BAD_REQUEST)
 
         if not user.is_active or not check_password(password, user.password):
