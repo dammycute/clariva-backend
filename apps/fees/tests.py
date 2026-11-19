@@ -64,6 +64,22 @@ class AutoInvoiceTest(FeeBase):
         self.assertEqual(made, 42)                       # 40 new + s1 and s2
         self.assertLess(len(ctx), 15)                    # not one-or-more queries per student
 
+    def test_invoices_can_be_filtered_by_class_and_say_which_class(self):
+        self._fee()
+        res = self.api.get('/api/fees/invoices/', {'class_group': str(self.jss1a.id)})
+        rows = res.json()['results']
+        self.assertEqual([r['student'] for r in rows], [str(self.s1.id)])
+        self.assertEqual(rows[0]['class_name'], 'JSS1A')
+        self.assertEqual(rows[0]['class_group'], str(self.jss1a.id))
+
+    def test_creating_an_announcement_works(self):
+        res = self.api.post('/api/comms/', {'title': 'Hi', 'body': 'School resumes'}, format='json')
+        self.assertEqual(res.status_code, 201, res.content)
+        from apps.comms.models import Announcement
+        ann = Announcement.objects.get(title='Hi')
+        self.assertEqual(ann.school, self.school)
+        self.assertEqual(ann.created_by, self.admin)
+
     def test_the_invoices_show_up_for_the_student_page(self):
         self._fee()
         res = self.api.get('/api/fees/invoices/', {'student_id': str(self.s1.id)})
