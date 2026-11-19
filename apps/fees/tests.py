@@ -187,16 +187,101 @@ class SafeFeeDeleteTest(FeeBase):
         self.assertEqual(self.api.delete(f"/api/fees/items/{item['id']}/").status_code, 204)
 
     def test_a_bundled_invoice_keeps_its_other_fees(self):
-        other = self._fee(name='Books', amount='5000')       # bills s1 and s2 a second invoice
-        # Bundle: put the Books line onto s1's Tuition invoice, as the Generate Invoices form does.
-        tuition = FeeInvoice.objects.get(student=self.s1, fee_item_id=self.item['id'])
-        books_inv = FeeInvoice.objects.get(student=self.s1, fee_item_id=other['id'])
-        FeeInvoiceItem.objects.filter(invoice=books_inv).update(invoice=tuition)
-        tuition.amount_due += Decimal('5000')
-        tuition.save()
-        books_inv.delete()
+        self._fee(name='Books', amount='5000')               # joins the Tuition invoice of s1 and s2
+        tuition = FeeInvoice.objects.get(student=self.s1)
+        self.assertEqual(tuition.items.count(), 2)
         res = self.api.delete(self.url + '?with_invoices=true')
         self.assertEqual(res.status_code, 204, res.content)
         tuition.refresh_from_db()
         self.assertEqual(tuition.amount_due, Decimal('5000.00'))          # only Books is left on it
         self.assertEqual(FeeInvoiceItem.objects.filter(invoice=tuition).count(), 1)
+
+
+class CompoundInvoiceTest(FeeBase):
+    """A student's fees add up on one invoice instead of one invoice per fee."""
+
+    def test_a_second_fee_joins_the_existing_invoice(self):
+        self._fee()                                                       # Tuition for JSS1
+        self._fee(name='Interhouse', amount='2000', year_group=None)      # for everyone
+        invoices = FeeInvoice.objects.filter(student=self.s1)
+        self.assertEqual(invoices.count(), 1)
+        inv = invoices.get()
+        self.assertEqual(inv.amount_due, Decimal('81400.00'))
+        self.assertEqual(sorted(l.fee_item.name for l in inv.items.all()), ['Interhouse', 'Tuition Fee'])
+
+    def test_a_student_with_no_invoice_yet_gets_a_new_one(self):
+        self._fee()
+        self._fee(name='Interhouse', amount='2000', year_group=None)      # JSS2 student s3 had nothing
+        inv = FeeInvoice.objects.get(student=self.s3)
+        self.assertEqual(inv.amount_due, Decimal('2000.00'))
+        self.assertEqual(FeeInvoice.objects.count(), 3)                   # one per student
+
+    def test_a_part_paid_invoice_still_takes_the_new_fee(self):
+        self._fee()
+        inv = FeeInvoice.objects.get(student=self.s1)
+        inv.amount_paid, inv.status = Decimal('10000'), 'partial'
+        inv.save()
+        self._fee(name='Interhouse', amount='2000', year_group=None)
+        inv.refresh_from_db()
+        self.assertEqual(FeeInvoice.objects.filter(student=self.s1).count(), 1)
+        self.assertEqual(inv.amount_due, Decimal('81400.00'))
+        self.assertEqual(inv.amount_paid, Decimal('10000.00'))
+
+    def test_a_fully_paid_invoice_is_left_alone(self):
+        self._fee()
+        inv = FeeInvoice.objects.get(student=self.s1)
+        inv.amount_paid, inv.status = inv.amount_due, 'paid'
+        inv.save()
+        self._fee(name='Interhouse', amount='2000', year_group=None)
+        inv.refresh_from_db()
+        self.assertEqual(inv.amount_due, Decimal('79400.00'))             # the receipt did not change
+        self.assertEqual(FeeInvoice.objects.filter(student=self.s1).count(), 2)
+
+    def test_several_fees_for_one_new_student_make_one_invoice(self):
+        self._fee()
+        self._fee(name='Interhouse', amount='2000', year_group=None)
+        from apps.fees.services import FeeService
+        new = self._student('s9', 'ADM9', self.jss1a)
+        FeeService.invoice_student(new)
+        inv = FeeInvoice.objects.get(student=new)
+        self.assertEqual(inv.items.count(), 2)
+        self.assertEqual(inv.amount_due, Decimal('81400.00'))
+
+    def test_saving_a_fee_again_changes_nothing(self):
+        self._fee()
+        item = self._fee(name='Interhouse', amount='2000', year_group=None)
+        self.api.patch(f"/api/fees/items/{item['id']}/", {'amount': '2000'}, format='json')
+        inv = FeeInvoice.objects.get(student=self.s1)
+        self.assertEqual(inv.items.count(), 2)
+        self.assertEqual(inv.amount_due, Decimal('81400.00'))
+
+    def test_deleting_one_fee_leaves_the_other_on_the_invoice(self):
+        tuition = self._fee()
+        self._fee(name='Interhouse', amount='2000', year_group=None)
+        res = self.api.delete(f"/api/fees/items/{tuition['id']}/?with_invoices=true")
+        self.assertEqual(res.status_code, 204, res.content)
+        inv = FeeInvoice.objects.get(student=self.s1)
+        self.assertEqual(inv.amount_due, Decimal('2000.00'))
+        self.assertEqual(inv.items.count(), 1)
+
+    def test_old_duplicate_invoices_can_be_merged(self):
+        from apps.fees.models import FeeItem
+        from apps.fees.services import FeeService
+        tuition = FeeItem.objects.create(school=self.school, name='Tuition', amount=1000, term='1st Term',
+                                         academic_year='2025/2026')
+        house = FeeItem.objects.create(school=self.school, name='Interhouse', amount=200, term='1st Term',
+                                       academic_year='2025/2026')
+        for item in (tuition, house):                                      # the old way: one invoice each
+            inv = FeeInvoice.objects.create(school=self.school, student=self.s1, fee_item=item,
+                                            amount_due=item.amount, status='unpaid')
+            FeeInvoiceItem.objects.create(invoice=inv, fee_item=item, amount_due=item.amount)
+        paid = FeeInvoice.objects.create(school=self.school, student=self.s2, fee_item=tuition,
+                                         amount_due=1000, amount_paid=1000, status='paid')
+        self.assertEqual(FeeService.merge_open_invoices(self.school), {'students': 1, 'invoices_removed': 1})
+        self.assertEqual(FeeInvoice.objects.filter(student=self.s1).count(), 2)       # a preview changes nothing
+        FeeService.merge_open_invoices(self.school, apply=True)
+        inv = FeeInvoice.objects.get(student=self.s1)
+        self.assertEqual(inv.amount_due, Decimal('1200.00'))
+        self.assertEqual(inv.items.count(), 2)
+        paid.refresh_from_db()
+        self.assertEqual(paid.amount_paid, Decimal('1000.00'))                         # money records untouched
