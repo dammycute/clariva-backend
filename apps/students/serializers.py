@@ -7,6 +7,7 @@ from rest_framework import serializers
 from apps.accounts.models import User
 from apps.base.encryption import hash_value
 from apps.classes.models import Class
+from apps.fees.services import FeeService
 from .models import StudentProfile
 
 # Fields that live on the profile, not the user. They are read from the request and saved there.
@@ -159,6 +160,7 @@ class StudentSerializer(serializers.ModelSerializer):
             profile.admission_no = next_admission_no(user.school)
             profile.admission_no_hash = hash_value(profile.admission_no)
         profile.save()
+        FeeService.invoice_student(user)
 
     @transaction.atomic
     def create(self, validated_data):

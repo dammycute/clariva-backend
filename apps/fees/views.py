@@ -4,6 +4,7 @@ from django.db import transaction
 from apps.mixins import SchoolFilterMixin
 from .models import FeeItem, FeeInvoice
 from .serializers import FeeItemSerializer, FeeInvoiceSerializer
+from .services import FeeService
 
 
 FINANCE_ROLES = {'school_admin', 'admin_officer', 'bursary', 'super_admin'}
@@ -23,6 +24,18 @@ class FeeItemViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     queryset = FeeItem.objects.all()
     serializer_class = FeeItemSerializer
     permission_classes = (FeeRolePermission,)
+
+    # Saving a fee bills the students it applies to. Students who already have it are skipped,
+    # so saving again is safe and also catches anyone added since.
+    def perform_create(self, serializer):
+        item = super().perform_create(serializer)
+        FeeService.invoice_students_for_item(item)
+        return item
+
+    def perform_update(self, serializer):
+        item = super().perform_update(serializer)
+        FeeService.invoice_students_for_item(item)
+        return item
 
 
 class FeeInvoiceViewSet(SchoolFilterMixin, viewsets.ModelViewSet):

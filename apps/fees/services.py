@@ -59,3 +59,75 @@ class FeeService:
                     created += 1
 
         return created
+
+    # -- Automatic invoices ---------------------------------------
+    # A fee item is a price. Students are only billed once they have an invoice, so these
+    # create the missing invoices whenever a fee is added or a student joins a class.
+
+    @staticmethod
+    def _applies(item, cls):
+        """Does this fee item apply to a student in class cls?"""
+        if item.class_group_id:
+            return bool(cls) and item.class_group_id == cls.id
+        year_group = cls.year_group if cls else None
+        if item.year_group and not (year_group and year_group.startswith(item.year_group)):
+            return False
+        if item.arm and not (cls and cls.arm == item.arm):
+            return False
+        return True
+
+    @staticmethod
+    def _is_current(item, school):
+        """Only bill fees for the school's current term and year (a blank term or year means any)."""
+        return ((not item.term or item.term == school.current_term)
+                and (not item.academic_year or item.academic_year == school.current_academic_year))
+
+    @staticmethod
+    def _amount(item, cls):
+        year_group = cls.year_group if cls else None
+        if item.pricing_tiers and year_group in item.pricing_tiers:
+            return item.pricing_tiers[year_group]
+        return item.amount
+
+    @staticmethod
+    def _ensure_invoice(student, item, cls):
+        """Create the invoice unless this student already has one that includes this fee."""
+        if (FeeInvoice.objects.filter(student=student, fee_item=item).exists()
+                or FeeInvoiceItem.objects.filter(invoice__student=student, fee_item=item).exists()):
+            return False
+        amount = FeeService._amount(item, cls)
+        invoice = FeeInvoice.objects.create(
+            school=item.school, student=student, fee_item=item, amount_due=amount, status='unpaid')
+        FeeInvoiceItem.objects.create(invoice=invoice, fee_item=item, amount_due=amount)
+        return True
+
+    @staticmethod
+    @transaction.atomic
+    def invoice_students_for_item(item):
+        """Bill every active student the fee applies to. Returns how many invoices were made."""
+        if not item.is_mandatory or not FeeService._is_current(item, item.school):
+            return 0
+        students = User.objects.filter(
+            school=item.school, role='student', student_profile__student_status='active',
+            student_profile__class_group__isnull=False,
+        ).select_related('student_profile__class_group')
+        made = 0
+        for student in students:
+            cls = student.student_profile.class_group
+            if FeeService._applies(item, cls):
+                made += int(FeeService._ensure_invoice(student, item, cls))
+        return made
+
+    @staticmethod
+    @transaction.atomic
+    def invoice_student(student):
+        """Bill one student for every current mandatory fee that applies to their class."""
+        sp = getattr(student, 'student_profile', None)
+        cls = sp.class_group if sp else None
+        if not (sp and cls and sp.student_status == 'active' and student.school_id):
+            return 0
+        made = 0
+        for item in FeeItem.objects.filter(school_id=student.school_id, is_mandatory=True).select_related('school'):
+            if FeeService._is_current(item, item.school) and FeeService._applies(item, cls):
+                made += int(FeeService._ensure_invoice(student, item, cls))
+        return made
