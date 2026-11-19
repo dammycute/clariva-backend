@@ -383,6 +383,7 @@ class CBTStartSubmitTest(TestCase):
             duration_mins=30, pass_mark=40, status='published',
             shuffle_questions=True, shuffle_options=True,
         )
+        self.exam.classes.add(cls)      # an exam is only open to the classes it is made for
 
         # Create questions via admin client
         self.admin_client = APIClient()
@@ -427,7 +428,7 @@ class CBTStartSubmitTest(TestCase):
         self.client.force_authenticate(user=self.student_user)
         url = reverse('exam-start', kwargs={'pk': self.exam.pk})
         resp = self.client.post(url)
-        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 404)      # drafts are hidden from students
 
     def test_start_exam_double_submit_blocked(self):
         self.client.force_authenticate(user=self.student_user)
@@ -515,9 +516,10 @@ class CBTStartSubmitTest(TestCase):
 
         submit_url = reverse('examsession-submit', kwargs={'pk': session_id})
         self.client.post(submit_url, {'answers': {}}, format='json')
-        # Second submit
+        # Second submit: harmless, and it returns the result that was already stored
         resp = self.client.post(submit_url, {'answers': {}}, format='json')
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['score'], 0.0)
 
     def test_submit_wrong_user(self):
         # Another student tries to submit someone else's session
