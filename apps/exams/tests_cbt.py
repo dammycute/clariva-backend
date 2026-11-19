@@ -540,3 +540,38 @@ class TemplateFileTest(CBTBase):
         data = _make_docx(['Q1. Name the planet.', 'ANSWER: Jupiter', 'ACCEPT: The planet Jupiter | Jupiter planet', 'MARK: 2'])
         q = parse_question_docx(io.BytesIO(data))['questions'][0]
         self.assertEqual(q['accepted_answers'], ['The planet Jupiter', 'Jupiter planet'])
+
+
+class CountsAsTest(CBTBase):
+    """What an exam counts as (CA 1, CA 2, Assignment, Exam) and the term it belongs to."""
+
+    def _create(self, **extra):
+        body = {'title': 'T', 'subject': str(self.subject.id), 'duration_mins': 20, 'pass_mark': 40, **extra}
+        return self.client_for(self.teacher).post(reverse('exam-list'), body, format='json')
+
+    def test_term_and_year_default_to_the_schools_current_ones(self):
+        self.school.current_term = '2nd Term'
+        self.school.current_academic_year = '2026/2027'
+        self.school.save()
+        resp = self._create(component='ca1')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.json()['term'], '2nd Term')
+        self.assertEqual(resp.json()['academic_year'], '2026/2027')
+
+    def test_practice_exam_has_no_component_and_posts_nothing(self):
+        resp = self._create()
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertIsNone(resp.json()['component'])
+
+    def test_a_graded_exam_needs_a_subject(self):
+        resp = self.client_for(self.admin).post(reverse('exam-list'), {
+            'title': 'No subject', 'duration_mins': 20, 'component': 'exam'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('subject', resp.json())
+
+    def test_what_it_counts_as_is_locked_once_students_have_started(self):
+        self.start()                                   # a student begins self.exam (ca1)
+        resp = self.client_for(self.teacher).patch(reverse('exam-detail', kwargs={'pk': self.exam.pk}),
+                                                   {'component': 'exam'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('component', resp.json())
