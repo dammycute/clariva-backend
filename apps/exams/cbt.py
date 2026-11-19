@@ -14,6 +14,10 @@ from .models import Exam, ExamSession, Question
 CLOSE_GRACE_SECONDS = 60
 # A manual Submit is still accepted this long after the deadline, but flagged as late.
 LATE_GRACE_MINUTES = 5
+# A student whose connection dropped keeps answering on their device. After the deadline the
+# server waits this long for that device to come back online and hand in its answers.
+# Past it the attempt is closed with whatever the server already has.
+OFFLINE_GRACE_SECONDS = 600
 
 CA_DEFAULT_MAX = 10
 EXAM_DEFAULT_MAX = 70
@@ -80,6 +84,12 @@ def is_overdue(session: ExamSession, now=None) -> bool:
     return bool(session.deadline and now > session.deadline + timedelta(seconds=CLOSE_GRACE_SECONDS))
 
 
+def is_expired(session: ExamSession, now=None) -> bool:
+    """Past the deadline and past the wait for an offline device. Nothing more is accepted."""
+    now = now or timezone.now()
+    return bool(session.deadline and now > session.deadline + timedelta(seconds=OFFLINE_GRACE_SECONDS))
+
+
 # ── Results visibility and grades ────────────────────────────────
 
 def results_visible(exam: Exam) -> bool:
@@ -119,11 +129,13 @@ def post_grade(session: ExamSession) -> None:
 # ── Finishing an attempt ─────────────────────────────────────────
 
 @transaction.atomic
-def finalize_session(session_id, answers=None, reason='student', now=None):
+def finalize_session(session_id, answers=None, reason='student', now=None, finished_in_time=False):
     """Mark and close one attempt. Safe to call twice: the second call changes nothing.
 
     reason: 'student' (they pressed Submit), 'time' (the deadline passed) or 'closed'
-    (the exam was closed). Returns (session, did_finalize).
+    (the exam was closed). `finished_in_time` is the student's device saying it finished before
+    the clock ran out while offline; it is believed only inside the offline wait.
+    Returns (session, did_finalize).
     """
     now = now or timezone.now()
     session = (ExamSession.objects.select_for_update(of=('self',))   # lock only this row: Postgres cannot lock the nullable side of a join
@@ -142,6 +154,8 @@ def finalize_session(session_id, answers=None, reason='student', now=None):
     late = False
     if reason == 'student' and session.deadline:
         late = now > session.deadline + timedelta(minutes=LATE_GRACE_MINUTES)
+        if finished_in_time and not is_expired(session, now):
+            late = False
 
     session.answers = merged
     session.score = score
@@ -162,7 +176,7 @@ def close_overdue_sessions(**filters) -> int:
     """Submit every running attempt whose deadline has passed. Called whenever an attempt or
     its exam is touched, so no background job is needed."""
     now = timezone.now()
-    cutoff = now - timedelta(seconds=CLOSE_GRACE_SECONDS)
+    cutoff = now - timedelta(seconds=OFFLINE_GRACE_SECONDS)
     ids = list(ExamSession.objects.filter(status='active', deadline__lt=cutoff, **filters)
                .values_list('id', flat=True))
     closed = 0

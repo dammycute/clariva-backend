@@ -238,7 +238,48 @@ class AutosaveAndResumeTest(CBTBase):
 class CloseByTheClockTest(CBTBase):
 
     def _run_out_of_time(self, sid):
-        ExamSession.objects.filter(pk=sid).update(deadline=timezone.now() - timedelta(minutes=10))
+        ExamSession.objects.filter(pk=sid).update(deadline=timezone.now() - timedelta(minutes=30))
+
+    def _just_late(self, sid, minutes=3):
+        """Past the deadline, but inside the wait for an offline device."""
+        ExamSession.objects.filter(pk=sid).update(deadline=timezone.now() - timedelta(minutes=minutes))
+
+    def test_an_offline_device_can_hand_in_its_answers_a_few_minutes_late(self):
+        sid = self.start().json()['session_id']
+        self._just_late(sid)
+        c = self.client_for(self.student)
+        # autosave is refused, and the device is told time is up (not that the attempt is closed)
+        save = c.post(reverse('examsession-save', kwargs={'pk': sid}), {'answers': self.right}, format='json').json()
+        self.assertFalse(save['closed'])
+        self.assertTrue(save['expired'])
+        self.assertEqual(ExamSession.objects.get(pk=sid).status, 'active')
+        # starting again returns the attempt with no time left
+        self.assertEqual(self.start().json()['time_remaining'], 0)
+        # Submit takes the answers, and the device says it finished in time
+        resp = c.post(reverse('examsession-submit', kwargs={'pk': sid}),
+                      {'answers': self.right, 'finished_in_time': True}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        session = ExamSession.objects.get(pk=sid)
+        self.assertEqual(session.score, 6)
+        self.assertFalse(session.late_submission)
+
+    def test_a_late_submit_without_the_in_time_claim_is_flagged(self):
+        sid = self.start().json()['session_id']
+        self._just_late(sid, minutes=7)
+        self.client_for(self.student).post(reverse('examsession-submit', kwargs={'pk': sid}),
+                                           {'answers': self.right}, format='json')
+        self.assertTrue(ExamSession.objects.get(pk=sid).late_submission)
+
+    def test_after_the_wait_only_the_saved_answers_count(self):
+        sid = self.start().json()['session_id']
+        self._run_out_of_time(sid)                                     # 30 minutes past: too late
+        resp = self.client_for(self.student).post(
+            reverse('examsession-submit', kwargs={'pk': sid}),
+            {'answers': self.right, 'finished_in_time': True}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        session = ExamSession.objects.get(pk=sid)
+        self.assertEqual(session.score, 0)                             # the late answers were ignored
+        self.assertTrue(session.auto_submitted)
 
     def test_attempt_has_a_server_deadline(self):
         sid = self.start().json()['session_id']

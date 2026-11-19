@@ -869,9 +869,13 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         session = self._own_session(request)
         if session.status != 'active':
             return Response({'closed': True, **_result_payload(session)})
-        if cbt.is_overdue(session):
+        if cbt.is_expired(session):
             session, _ = cbt.finalize_session(session.pk, reason='time')
             return Response({'closed': True, **_result_payload(session)})
+        if cbt.is_overdue(session):
+            # Time is up, but the device may have been offline. Do not take more autosaves;
+            # tell it to hand in its answers with Submit.
+            return Response({'closed': False, 'expired': True, 'saved': 0, 'time_remaining': 0})
 
         answers = request.data.get('answers') or {}
         if not isinstance(answers, dict):
@@ -895,9 +899,16 @@ class ExamSessionViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         if session.status != 'active':
             return Response(_result_payload(session))      # sending Submit twice is harmless
 
+        if cbt.is_expired(session):
+            # Too late even for an offline device: the answers already saved are what count.
+            session, _ = cbt.finalize_session(session.pk, reason='time')
+            return Response(_result_payload(session))
+
         session.tab_switches = int(request.data.get('tab_switches', 0) or 0)
         session.save(update_fields=['tab_switches'])
-        session, _ = cbt.finalize_session(session.pk, answers=request.data.get('answers'), reason='student')
+        session, _ = cbt.finalize_session(
+            session.pk, answers=request.data.get('answers'), reason='student',
+            finished_in_time=request.data.get('finished_in_time') is True)
         return Response(_result_payload(session))
 
     @action(detail=True, methods=['post'])
