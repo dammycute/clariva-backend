@@ -131,3 +131,51 @@ class FeeService:
             if FeeService._is_current(item, item.school) and FeeService._applies(item, cls):
                 made += int(FeeService._ensure_invoice(student, item, cls))
         return made
+
+    # -- Deleting a fee together with its bills ------------------
+
+    @staticmethod
+    def invoices_for_item(item):
+        """Every invoice that bills this fee, either as the whole invoice or as one line of it."""
+        return FeeInvoice.objects.filter(
+            models.Q(fee_item=item) | models.Q(items__fee_item=item)).distinct()
+
+    @staticmethod
+    def delete_impact(item):
+        """What deleting this fee would touch: how many invoices, and how many have payments."""
+        invoices = list(FeeInvoice.objects.filter(
+            models.Q(fee_item=item) | models.Q(items__fee_item=item)).distinct().prefetch_related('items'))
+        paid = [
+            i for i in invoices
+            if i.amount_paid > 0 or any(line.amount_paid > 0 for line in i.items.all())
+        ]
+        return {'invoices': len(invoices), 'with_payments': len(paid)}
+
+    @staticmethod
+    @transaction.atomic
+    def remove_invoices_for_item(item):
+        """Remove this fee's bills. Refuses if any has a payment, so no money record is lost.
+
+        An invoice that bills only this fee is deleted. An invoice that bundles other fees too
+        keeps them: only this fee's line is removed and the invoice total is reduced.
+        Returns the number of invoices deleted.
+        """
+        impact = FeeService.delete_impact(item)
+        if impact['with_payments']:
+            raise ValueError(
+                f"{impact['with_payments']} invoice(s) for this fee already have a payment recorded, "
+                'so they cannot be deleted.')
+        deleted = 0
+        for invoice in FeeService.invoices_for_item(item).prefetch_related('items'):
+            lines = list(invoice.items.all())
+            mine = [line for line in lines if line.fee_item_id == item.id]
+            others = [line for line in lines if line.fee_item_id != item.id]
+            if not others:
+                invoice.delete()
+                deleted += 1
+                continue
+            invoice.amount_due -= sum(line.amount_due for line in mine)
+            invoice.save(update_fields=['amount_due'])
+            for line in mine:
+                line.delete()
+        return deleted
