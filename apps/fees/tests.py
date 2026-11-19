@@ -50,6 +50,20 @@ class AutoInvoiceTest(FeeBase):
         self.assertEqual(inv.amount_due, Decimal('79400.00'))
         self.assertEqual(FeeInvoiceItem.objects.filter(invoice=inv).count(), 1)
 
+    def test_billing_many_students_takes_a_handful_of_queries(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from apps.fees.models import FeeItem
+        from apps.fees.services import FeeService
+        for n in range(40):
+            self._student(f'bulk{n}', f'BULK{n}', self.jss1a)
+        item = FeeItem.objects.create(school=self.school, name='Tuition Fee', amount=1000, year_group='JSS1',
+                                      term='1st Term', academic_year='2025/2026')
+        with CaptureQueriesContext(connection) as ctx:
+            made = FeeService.invoice_students_for_item(item)
+        self.assertEqual(made, 42)                       # 40 new + s1 and s2
+        self.assertLess(len(ctx), 15)                    # not one-or-more queries per student
+
     def test_the_invoices_show_up_for_the_student_page(self):
         self._fee()
         res = self.api.get('/api/fees/invoices/', {'student_id': str(self.s1.id)})

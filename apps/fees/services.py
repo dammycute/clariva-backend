@@ -104,19 +104,33 @@ class FeeService:
     @staticmethod
     @transaction.atomic
     def invoice_students_for_item(item):
-        """Bill every active student the fee applies to. Returns how many invoices were made."""
+        """Bill every active student the fee applies to. Returns how many invoices were made.
+
+        Works in a few queries however many students there are: one to find who is already
+        billed, then the missing invoices and their lines are saved in two batches.
+        """
         if not item.is_mandatory or not FeeService._is_current(item, item.school):
             return 0
-        students = User.objects.filter(
+        students = list(User.objects.filter(
             school=item.school, role='student', student_profile__student_status='active',
             student_profile__class_group__isnull=False,
-        ).select_related('student_profile__class_group')
-        made = 0
+        ).select_related('student_profile__class_group'))
+        billed = set(FeeInvoice.objects.filter(fee_item=item).values_list('student_id', flat=True))
+        billed |= set(FeeInvoiceItem.objects.filter(fee_item=item).values_list('invoice__student_id', flat=True))
+
+        invoices, lines = [], []
         for student in students:
             cls = student.student_profile.class_group
-            if FeeService._applies(item, cls):
-                made += int(FeeService._ensure_invoice(student, item, cls))
-        return made
+            if student.id in billed or not FeeService._applies(item, cls):
+                continue
+            amount = FeeService._amount(item, cls)
+            invoice = FeeInvoice(school=item.school, student=student, fee_item=item,
+                                 amount_due=amount, status='unpaid')
+            invoices.append(invoice)
+            lines.append(FeeInvoiceItem(invoice=invoice, fee_item=item, amount_due=amount))
+        FeeInvoice.objects.bulk_create(invoices)
+        FeeInvoiceItem.objects.bulk_create(lines)
+        return len(invoices)
 
     @staticmethod
     @transaction.atomic
