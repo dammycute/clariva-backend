@@ -126,7 +126,7 @@ def finalize_session(session_id, answers=None, reason='student', now=None):
     (the exam was closed). Returns (session, did_finalize).
     """
     now = now or timezone.now()
-    session = (ExamSession.objects.select_for_update()
+    session = (ExamSession.objects.select_for_update(of=('self',))   # lock only this row: Postgres cannot lock the nullable side of a join
                .select_related('exam', 'exam__school', 'exam__subject', 'student')
                .get(pk=session_id))
     if session.status != 'active':
