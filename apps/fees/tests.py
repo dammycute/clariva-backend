@@ -11,7 +11,7 @@ from apps.students.models import StudentProfile
 from .models import FeeInvoice, FeeInvoiceItem
 
 
-class AutoInvoiceTest(TestCase):
+class FeeBase(TestCase):
     def setUp(self):
         self.school = School.objects.create(name='Queens', subdomain='queens-fee',
                                             current_term='1st Term', current_academic_year='2025/2026')
@@ -39,6 +39,9 @@ class AutoInvoiceTest(TestCase):
         self.assertEqual(res.status_code, 201, res.content)
         return res.json()
 
+
+
+class AutoInvoiceTest(FeeBase):
     def test_a_new_fee_bills_only_the_students_it_applies_to(self):
         self._fee()
         self.assertEqual(FeeInvoice.objects.filter(student__in=[self.s1, self.s2]).count(), 2)
@@ -106,3 +109,64 @@ class AutoInvoiceTest(TestCase):
                                                        'target_class_id': str(self.jss1a.id)}, format='json')
         self.assertEqual(res.status_code, 200, res.content)
         self.assertTrue(FeeInvoice.objects.filter(student=self.s3).exists())
+
+
+class SafeFeeDeleteTest(FeeBase):
+    """Deleting a fee: its unpaid invoices go with it on request; paid ones are never deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.item = self._fee()                              # bills s1 and s2
+        self.url = f"/api/fees/items/{self.item['id']}/"
+
+    def test_impact_counts_invoices_and_payments(self):
+        res = self.api.get(self.url + 'delete_impact/')
+        self.assertEqual(res.json(), {'invoices': 2, 'with_payments': 0})
+
+    def test_plain_delete_asks_what_to_do_with_the_invoices(self):
+        res = self.api.delete(self.url)
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()['invoices'], 2)
+        self.assertEqual(FeeInvoice.objects.count(), 2)      # nothing was deleted
+
+    def test_delete_with_invoices_removes_the_fee_and_its_unpaid_invoices(self):
+        res = self.api.delete(self.url + '?with_invoices=true')
+        self.assertEqual(res.status_code, 204, res.content)
+        self.assertEqual(FeeInvoice.objects.count(), 0)
+        self.assertEqual(FeeInvoiceItem.objects.count(), 0)
+        self.assertEqual(self.api.get('/api/fees/items/').json()['results'] if isinstance(
+            self.api.get('/api/fees/items/').json(), dict) else self.api.get('/api/fees/items/').json(), [])
+
+    def test_keep_invoices_leaves_them_as_before(self):
+        res = self.api.delete(self.url + '?keep_invoices=true')
+        self.assertEqual(res.status_code, 204)
+        self.assertEqual(FeeInvoice.objects.count(), 2)
+
+    def test_an_invoice_with_a_payment_blocks_the_delete(self):
+        inv = FeeInvoice.objects.get(student=self.s1)
+        inv.amount_paid = Decimal('1000')
+        inv.status = 'partial'
+        inv.save()
+        res = self.api.delete(self.url + '?with_invoices=true')
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(FeeInvoice.objects.count(), 2)      # nothing removed, not even the unpaid one
+        self.assertTrue(self.api.get(self.url).status_code == 200)    # and the fee still exists
+
+    def test_a_fee_nobody_was_billed_for_deletes_normally(self):
+        item = self._fee(name='Uniform', year_group='SS3')   # no SS3 class, so nobody is billed
+        self.assertEqual(self.api.delete(f"/api/fees/items/{item['id']}/").status_code, 204)
+
+    def test_a_bundled_invoice_keeps_its_other_fees(self):
+        other = self._fee(name='Books', amount='5000')       # bills s1 and s2 a second invoice
+        # Bundle: put the Books line onto s1's Tuition invoice, as the Generate Invoices form does.
+        tuition = FeeInvoice.objects.get(student=self.s1, fee_item_id=self.item['id'])
+        books_inv = FeeInvoice.objects.get(student=self.s1, fee_item_id=other['id'])
+        FeeInvoiceItem.objects.filter(invoice=books_inv).update(invoice=tuition)
+        tuition.amount_due += Decimal('5000')
+        tuition.save()
+        books_inv.delete()
+        res = self.api.delete(self.url + '?with_invoices=true')
+        self.assertEqual(res.status_code, 204, res.content)
+        tuition.refresh_from_db()
+        self.assertEqual(tuition.amount_due, Decimal('5000.00'))          # only Books is left on it
+        self.assertEqual(FeeInvoiceItem.objects.filter(invoice=tuition).count(), 1)
