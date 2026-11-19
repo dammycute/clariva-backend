@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models, transaction
 
 from apps.accounts.models import User
@@ -86,51 +88,81 @@ class FeeService:
     def _amount(item, cls):
         year_group = cls.year_group if cls else None
         if item.pricing_tiers and year_group in item.pricing_tiers:
-            return item.pricing_tiers[year_group]
-        return item.amount
+            return Decimal(str(item.pricing_tiers[year_group]))
+        return Decimal(str(item.amount))
 
     @staticmethod
-    def _ensure_invoice(student, item, cls):
-        """Create the invoice unless this student already has one that includes this fee."""
-        if (FeeInvoice.objects.filter(student=student, fee_item=item).exists()
-                or FeeInvoiceItem.objects.filter(invoice__student=student, fee_item=item).exists()):
-            return False
-        amount = FeeService._amount(item, cls)
-        invoice = FeeInvoice.objects.create(
-            school=item.school, student=student, fee_item=item, amount_due=amount, status='unpaid')
-        FeeInvoiceItem.objects.create(invoice=invoice, fee_item=item, amount_due=amount)
-        return True
+    def _same_period(a, b):
+        """Do two fee items belong to the same term and year? A blank term or year fits any."""
+        return ((not a.term or not b.term or a.term == b.term)
+                and (not a.academic_year or not b.academic_year or a.academic_year == b.academic_year))
+
+    @staticmethod
+    def _bill(pairs):
+        """Bill each (student, fee item, class). Fees add up on ONE invoice per student.
+
+        A student's fees for a term live on a single invoice, one line per fee, and the invoice
+        total is their sum. A new fee is added as a line on the student's newest unpaid or part-paid
+        invoice for that term. A fully paid invoice is a closed receipt, so it is left alone and a
+        new invoice is started. A student already billed for the fee is skipped, so this is safe to
+        repeat. It runs in a handful of queries however many students there are.
+        Returns how many fee lines were added.
+        """
+        if not pairs:
+            return 0
+        student_ids = {s.id for s, _, _ in pairs}
+        item_ids = {i.id for _, i, _ in pairs}
+
+        billed = set(FeeInvoice.objects.filter(student_id__in=student_ids, fee_item_id__in=item_ids)
+                     .values_list('student_id', 'fee_item_id'))
+        billed |= set(FeeInvoiceItem.objects.filter(invoice__student_id__in=student_ids, fee_item_id__in=item_ids)
+                      .values_list('invoice__student_id', 'fee_item_id'))
+
+        open_invoices = {}
+        for inv in (FeeInvoice.objects.filter(student_id__in=student_ids).exclude(status='paid')
+                    .order_by('-created_at').prefetch_related('items__fee_item')):
+            open_invoices.setdefault(inv.student_id, []).append(inv)
+
+        new_invoices, lines, grown = {}, [], {}
+        for student, item, cls in pairs:
+            if (student.id, item.id) in billed:
+                continue
+            amount = FeeService._amount(item, cls)
+            invoice = new_invoices.get(student.id)
+            if invoice is None:
+                invoice = next((
+                    inv for inv in open_invoices.get(student.id, [])
+                    if all(FeeService._same_period(line.fee_item, item)
+                           for line in inv.items.all() if line.fee_item_id)), None)
+                if invoice is not None:
+                    grown[invoice.id] = invoice
+                else:
+                    invoice = FeeInvoice(school=item.school, student=student, fee_item=item,
+                                         amount_due=0, status='unpaid')
+                    new_invoices[student.id] = invoice
+            invoice.amount_due += amount
+            lines.append(FeeInvoiceItem(invoice=invoice, fee_item=item, amount_due=amount))
+            billed.add((student.id, item.id))
+
+        FeeInvoice.objects.bulk_create(list(new_invoices.values()))
+        if grown:
+            FeeInvoice.objects.bulk_update(list(grown.values()), ['amount_due'])
+        FeeInvoiceItem.objects.bulk_create(lines)
+        return len(lines)
 
     @staticmethod
     @transaction.atomic
     def invoice_students_for_item(item):
-        """Bill every active student the fee applies to. Returns how many invoices were made.
-
-        Works in a few queries however many students there are: one to find who is already
-        billed, then the missing invoices and their lines are saved in two batches.
-        """
+        """Bill every active student this fee applies to. Returns how many were billed."""
         if not item.is_mandatory or not FeeService._is_current(item, item.school):
             return 0
-        students = list(User.objects.filter(
+        students = User.objects.filter(
             school=item.school, role='student', student_profile__student_status='active',
             student_profile__class_group__isnull=False,
-        ).select_related('student_profile__class_group'))
-        billed = set(FeeInvoice.objects.filter(fee_item=item).values_list('student_id', flat=True))
-        billed |= set(FeeInvoiceItem.objects.filter(fee_item=item).values_list('invoice__student_id', flat=True))
-
-        invoices, lines = [], []
-        for student in students:
-            cls = student.student_profile.class_group
-            if student.id in billed or not FeeService._applies(item, cls):
-                continue
-            amount = FeeService._amount(item, cls)
-            invoice = FeeInvoice(school=item.school, student=student, fee_item=item,
-                                 amount_due=amount, status='unpaid')
-            invoices.append(invoice)
-            lines.append(FeeInvoiceItem(invoice=invoice, fee_item=item, amount_due=amount))
-        FeeInvoice.objects.bulk_create(invoices)
-        FeeInvoiceItem.objects.bulk_create(lines)
-        return len(invoices)
+        ).select_related('student_profile__class_group')
+        pairs = [(s, item, s.student_profile.class_group) for s in students
+                 if FeeService._applies(item, s.student_profile.class_group)]
+        return FeeService._bill(pairs)
 
     @staticmethod
     @transaction.atomic
@@ -140,11 +172,54 @@ class FeeService:
         cls = sp.class_group if sp else None
         if not (sp and cls and sp.student_status == 'active' and student.school_id):
             return 0
-        made = 0
-        for item in FeeItem.objects.filter(school_id=student.school_id, is_mandatory=True).select_related('school'):
-            if FeeService._is_current(item, item.school) and FeeService._applies(item, cls):
-                made += int(FeeService._ensure_invoice(student, item, cls))
-        return made
+        pairs = [(student, item, cls)
+                 for item in FeeItem.objects.filter(school_id=student.school_id, is_mandatory=True).select_related('school')
+                 if FeeService._is_current(item, item.school) and FeeService._applies(item, cls)]
+        return FeeService._bill(pairs)
+
+    @staticmethod
+    @transaction.atomic
+    def merge_open_invoices(school, apply=False):
+        """Join a student's separate unpaid invoices for the same term into one.
+
+        For fixing invoices made before fees were combined. Only invoices with no payment at all
+        are touched. Returns {'students', 'invoices_removed'}. With apply=False nothing is changed.
+        """
+        by_student = {}
+        for inv in (FeeInvoice.objects.filter(school=school, amount_paid=0)
+                    .exclude(status='paid').order_by('created_at').prefetch_related('items__fee_item')):
+            if any(line.amount_paid > 0 for line in inv.items.all()):
+                continue
+            by_student.setdefault(inv.student_id, []).append(inv)
+
+        students = removed = 0
+        for invoices in by_student.values():
+            groups = []                       # invoices that share a term and year
+            for inv in invoices:
+                for group in groups:
+                    if all(FeeService._same_period(a.fee_item, b.fee_item)
+                           for a in group[0].items.all() for b in inv.items.all()
+                           if a.fee_item_id and b.fee_item_id):
+                        group.append(inv)
+                        break
+                else:
+                    groups.append([inv])
+            merged_any = False
+            for group in groups:
+                if len(group) < 2:
+                    continue
+                keep, rest = group[0], group[1:]
+                merged_any = True
+                removed += len(rest)
+                if not apply:
+                    continue
+                for inv in rest:
+                    FeeInvoiceItem.objects.filter(invoice=inv).update(invoice=keep)
+                    keep.amount_due += inv.amount_due
+                    inv.delete()
+                keep.save(update_fields=['amount_due'])
+            students += int(merged_any)
+        return {'students': students, 'invoices_removed': removed}
 
     # -- Deleting a fee together with its bills ------------------
 
