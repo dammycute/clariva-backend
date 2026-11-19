@@ -6,6 +6,7 @@ from django.db.models import Q
 from apps.mixins import SchoolFilterMixin
 from apps.accounts.models import User, StudentAccessCode
 from apps.staff.permissions import IsSchoolAdminRole
+from apps.fees.services import FeeService
 from .serializers import StudentSerializer, has_login
 import secrets
 import string
@@ -100,6 +101,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                         guardian_email=row.get('guardian_email') or None,
                         student_status='active',
                     )
+                FeeService.invoice_student(user)
                 created += 1
                 students.append({'name': name, 'admission_no': adm})
             except Exception as e:
@@ -116,6 +118,8 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         updated = StudentProfile.objects.filter(
             user_id__in=student_ids, user__school=request.user.school
         ).update(class_group_id=target_class_id)
+        for student in User.objects.filter(id__in=student_ids, school=request.user.school, role='student'):
+            FeeService.invoice_student(student)
         return Response({'promoted': updated})
 
     def _sanitize_admission(self, admission_no):
