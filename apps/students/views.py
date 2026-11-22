@@ -6,6 +6,8 @@ from django.db.models import Q
 from apps.mixins import SchoolFilterMixin
 from apps.accounts.models import User, StudentAccessCode
 from apps.staff.permissions import IsSchoolAdminRole
+from apps.permissions import IsStaffRole
+from apps.accounts.sessions import end_session
 from apps.fees.services import FeeService
 from .serializers import StudentSerializer, has_login
 import secrets
@@ -20,6 +22,8 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         admin_only = {'promote', 'bulk_create_accounts', 'import_csv', 'reset_password'}
         if self.action in admin_only:
             return [IsSchoolAdminRole()]
+        if self.action == 'sign_out_everywhere':
+            return [IsStaffRole()]
         return super().get_permissions()
 
     def get_queryset(self):
@@ -185,6 +189,14 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         sp = getattr(student, 'student_profile', None)
         return Response({'admission_no': sp.admission_no if sp else None, 'email': student.email,
                          'password': password})
+
+    @action(detail=True, methods=['post'])
+    def sign_out_everywhere(self, request, pk=None):
+        """Sign the student out of every device. Use it when a device is lost or dead during an
+        exam, or when someone else may be using the account. The student can sign in again at once."""
+        student = self.get_object()
+        end_session(student)
+        return Response({'signed_out': True})
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):

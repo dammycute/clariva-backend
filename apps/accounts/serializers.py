@@ -2,6 +2,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User
+from .sessions import start_session
 
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -14,6 +15,13 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         attrs['username'] = attrs.pop('email')
         data = super().validate(attrs)
         user = self.user
+        request = self.context.get('request')
+        device_id = request.data.get('device_id', '') if request is not None else ''
+        if start_session(user, request, device_id):
+            # the tokens were made before the session existed; make them again so they carry it
+            refresh = self.get_token(user)
+            data['refresh'] = str(refresh)
+            data['access'] = str(refresh.access_token)
         data['role'] = user.role
         data['school_id'] = str(user.school_id) if user.school_id else None
         return data
@@ -23,6 +31,8 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         token = super().get_token(user)
         token['role'] = user.role
         token['school_id'] = str(user.school_id) if user.school_id else None
+        if user.role == 'student' and user.active_session_id:
+            token['sid'] = str(user.active_session_id)
         return token
 
 

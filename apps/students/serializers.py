@@ -56,6 +56,8 @@ class StudentSerializer(serializers.ModelSerializer):
     academic_year = serializers.SerializerMethodField()
     has_account = serializers.SerializerMethodField()
     user_email = serializers.SerializerMethodField()
+    signed_in_on = serializers.SerializerMethodField()
+    signed_in_at = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -65,13 +67,20 @@ class StudentSerializer(serializers.ModelSerializer):
             'date_of_birth', 'gender', 'lga_of_origin', 'state_of_origin',
             'admission_no', 'class_group', 'class_name', 'guardian_name',
             'guardian_phone', 'guardian_email', 'student_status', 'academic_year',
-            'has_account', 'user_email',
+            'has_account', 'user_email', 'signed_in_on', 'signed_in_at',
         )
         # username and email are made by the server; school is set from the signed-in admin.
         read_only_fields = ('school', 'school_id', 'role', 'username', 'email')
 
     def _profile(self, obj):
         return getattr(obj, 'student_profile', None)
+
+    def get_signed_in_on(self, obj):
+        """The device the student is signed in on, such as 'Chrome on Android', or None."""
+        return obj.session_device or None
+
+    def get_signed_in_at(self, obj):
+        return obj.session_started_at.isoformat() if obj.session_started_at else None
 
     def get_class_name(self, obj):
         sp = self._profile(obj)

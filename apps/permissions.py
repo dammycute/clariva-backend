@@ -4,6 +4,12 @@ ADMIN_ROLES = ('super_admin', 'school_admin', 'admin_officer', 'principal')
 STAFF_WRITE_ROLES = ADMIN_ROLES + ('teacher',)
 
 
+class IsStaffRole(permissions.IsAuthenticated):
+    """Admin roles and teachers."""
+    def has_permission(self, request, view):
+        return super().has_permission(request, view) and getattr(request.user, 'role', None) in STAFF_WRITE_ROLES
+
+
 class RoleWritePermission(permissions.BasePermission):
     """Role gate for school-scoped ViewSets.
 
