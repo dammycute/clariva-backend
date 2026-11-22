@@ -77,6 +77,8 @@ class School(BaseUUIDModel):
     current_term = models.CharField(max_length=50, choices=TERM_CHOICES, default='1st Term')
     current_academic_year = models.CharField(max_length=20, default='2025/2026')
     plan = models.CharField(max_length=50, default='trial')
+    # A student can be signed in on one device at a time.
+    single_device_students = models.BooleanField(default=True)
     status = models.CharField(max_length=20, default='active')
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -5,6 +5,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.hashers import check_password
 from .serializers import AdminCreateUserSerializer, OnboardSerializer, SelfUpdateSerializer, UserSerializer
 from .models import User
+from .sessions import start_session, end_session
 from apps.base.encryption import hash_value
 
 
@@ -105,13 +106,17 @@ class StudentLoginView(generics.GenericAPIView):
         if not user.is_active or not check_password(password, user.password):
             return Response({'detail': INVALID_STUDENT_LOGIN}, status=status.HTTP_400_BAD_REQUEST)
 
+        sid = start_session(user, request, request.data.get('device_id', ''))
         refresh = RefreshToken.for_user(user)
         refresh['role'] = 'student'
         refresh['school_id'] = str(user.school_id) if user.school_id else None
-        refresh.access_token['role'] = 'student'
-        refresh.access_token['school_id'] = str(user.school_id) if user.school_id else None
+        if sid:
+            refresh['sid'] = sid
+        access = refresh.access_token
+        access['role'] = 'student'
+        access['school_id'] = str(user.school_id) if user.school_id else None
         return Response({
-            'access': str(refresh.access_token),
+            'access': str(access),
             'refresh': str(refresh),
             'role': 'student',
             'student_name': user.get_full_name(),
@@ -129,6 +134,7 @@ class LogoutView(generics.GenericAPIView):
             RefreshToken(request.data.get('refresh', '')).blacklist()
         except TokenError:
             pass
+        end_session(request.user)          # the student's other tokens stop working too
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

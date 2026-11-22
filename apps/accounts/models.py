@@ -32,6 +32,11 @@ class User(AbstractUser):
     state_of_origin = EncryptedCharField(max_length=100, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     last_login = models.DateTimeField(null=True, blank=True)
+    # One device at a time for students (see accounts/sessions.py).
+    active_session_id = models.UUIDField(null=True, blank=True, editable=False)
+    session_device_id = models.CharField(max_length=64, blank=True, default='', editable=False)
+    session_device = models.CharField(max_length=120, blank=True, default='', editable=False)
+    session_started_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     def __str__(self):
         name = self.get_full_name() or self.username or self.email or 'Unnamed'
