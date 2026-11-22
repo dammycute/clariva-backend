@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     'apps.comms',
     'apps.audit',
     'apps.guardian',
+    'apps.leads',
 ]
 
 MIDDLEWARE = [
@@ -160,6 +161,12 @@ if not DEBUG:
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
+# Demo requests from the landing page are emailed to the owner through Resend.
+# Without the key the request is still saved; only the email is skipped.
+RESEND_API_KEY = config('RESEND_API_KEY', default='')
+DEMO_NOTIFY_EMAIL = config('DEMO_NOTIFY_EMAIL', default='')
+DEMO_FROM_EMAIL = config('DEMO_FROM_EMAIL', default='Clariva <onboarding@resend.dev>')
+
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
 CORS_ALLOW_CREDENTIALS = True
@@ -186,6 +193,7 @@ REST_FRAMEWORK = {
         'user': '60/minute',
         'otp': '5/minute',
         'auth': '10/minute',
+        'demo': '5/hour',
     },
     # Number of trusted reverse proxies, so throttles see the real client IP.
     'NUM_PROXIES': config('NUM_PROXIES', default=0, cast=int),
