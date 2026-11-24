@@ -4,8 +4,11 @@ from rest_framework import generics, permissions, serializers, status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
+from apps.schools.views import IsSuperAdmin
+
 from .models import DemoRequest
 from .notify import notify
+from .serializers import DemoRequestReadSerializer
 
 
 class DemoRequestSerializer(serializers.ModelSerializer):
@@ -46,3 +49,14 @@ class DemoRequestView(generics.CreateAPIView):
         if notify(lead):
             DemoRequest.objects.filter(pk=lead.pk).update(emailed=True)
         return Response({'received': True}, status=status.HTTP_201_CREATED)
+
+
+class DemoRequestListView(generics.ListAPIView):
+    """Platform admin: every demo request from the landing page, newest first.
+
+    Phone and email are encrypted at rest, so they cannot be searched in SQL; the
+    console filters them in the browser once they are decrypted.
+    """
+    serializer_class = DemoRequestReadSerializer
+    permission_classes = (permissions.IsAuthenticated, IsSuperAdmin)
+    queryset = DemoRequest.objects.all()

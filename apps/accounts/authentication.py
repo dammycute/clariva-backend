@@ -14,10 +14,19 @@ REPLACED = {
 
 
 class SessionJWTAuthentication(JWTAuthentication):
-    """The usual token check, plus: a student's token must belong to their one live session.
+    """The usual token check, plus: a student's token must belong to their one live session,
+    and a school that has not paid is held at the billing gate.
 
-    The user row is already loaded to check the token, so this adds no database query.
+    The user row is already loaded to check the token, so the session check adds no query.
+    The billing check reads one cached row per school (apps.billing.services).
     """
+
+    def authenticate(self, request):
+        result = super().authenticate(request)
+        if result is not None:
+            from apps.billing.services import enforce     # local: keeps app loading clean
+            enforce(result[0], request)
+        return result
 
     def get_user(self, validated_token):
         user = super().get_user(validated_token)

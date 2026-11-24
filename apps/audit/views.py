@@ -26,6 +26,9 @@ class ActivityLogViewSet(SchoolFilterMixin, viewsets.ReadOnlyModelViewSet):
         action = self.request.query_params.get('action')
         model = self.request.query_params.get('model')
         search = self.request.query_params.get('search')
+        school = self.request.query_params.get('school')
+        if school:
+            qs = qs.filter(school_id=school)
         if action:
             qs = qs.filter(action=action)
         if model:

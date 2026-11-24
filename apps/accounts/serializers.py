@@ -24,6 +24,7 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
             data['access'] = str(refresh.access_token)
         data['role'] = user.role
         data['school_id'] = str(user.school_id) if user.school_id else None
+        data['must_change_password'] = user.must_change_password
         return data
 
     @classmethod
@@ -47,12 +48,14 @@ class OnboardSerializer(serializers.ModelSerializer):
     school_address = serializers.CharField(max_length=500, write_only=True, required=False, allow_blank=True)
     school_state = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
     school_lga = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
+    # How many students the school has. It is the first quote, before any student is added.
+    school_students = serializers.IntegerField(write_only=True, min_value=1, max_value=100000)
 
     class Meta:
         model = User
         fields = ('username', 'email', 'password', 'first_name', 'last_name', 'phone',
                   'school_name', 'school_subdomain', 'school_type', 'school_address',
-                  'school_state', 'school_lga')
+                  'school_state', 'school_lga', 'school_students')
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -66,11 +69,22 @@ class OnboardSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('This subdomain is already taken.')
         return slug
 
+    def validate_school_state(self, value):
+        """The state must come from the list the app already has, so billing can find its calendar."""
+        from apps.locations.models import State
+        name = (value or '').strip()
+        if not name or not State.objects.exists():
+            return name
+        match = State.objects.filter(name__iexact=name).first()
+        if match is None:
+            raise serializers.ValidationError('Choose a state from the list.')
+        return match.name
+
     def create(self, validated_data):
         from apps.schools.models import School
-        from django.utils import timezone
-        from datetime import timedelta
 
+        # Every school pays online first: no trial, no free period. Until it pays, it is
+        # `pending` and sees only its billing page.
         school_data = {
             'name': validated_data.pop('school_name'),
             'subdomain': validated_data.pop('school_subdomain'),
@@ -80,9 +94,10 @@ class OnboardSerializer(serializers.ModelSerializer):
             'lga': validated_data.pop('school_lga', '') or '',
             'proprietor_name': f"{validated_data.get('first_name', '')} {validated_data.get('last_name', '')}".strip(),
             'proprietor_phone': validated_data.get('phone', '') or '',
-            'status': 'active',
-            'plan': 'trial',
-            'trial_ends_at': timezone.now() + timedelta(days=30),
+            'declared_students': validated_data.pop('school_students', 0),
+            'status': 'pending',
+            'plan': 'basic',
+            'trial_ends_at': None,
         }
 
         school = School.objects.create(**school_data)
@@ -174,12 +189,14 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name', 'phone', 'role',
-            'is_active', 'school', 'school_id', 'avatar_url', 'photo_url',
+            'is_active', 'must_change_password', 'school', 'school_id', 'avatar_url', 'photo_url',
             'date_of_birth', 'gender', 'lga_of_origin', 'state_of_origin',
             'admission_no', 'class_group', 'class_name', 'guardian_name',
             'guardian_phone', 'guardian_email', 'student_status', 'academic_year',
         )
-        read_only_fields = ('id', 'username', 'email', 'role', 'is_active', 'school', 'school_id')
+        read_only_fields = (
+            'id', 'username', 'email', 'role', 'is_active', 'must_change_password', 'school', 'school_id',
+        )
 
     def get_class_name(self, obj):
         sp = getattr(obj, 'student_profile', None)
@@ -212,3 +229,43 @@ class UserSerializer(serializers.ModelSerializer):
     def get_academic_year(self, obj):
         sp = getattr(obj, 'student_profile', None)
         return sp.academic_year if sp else None
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """A signed-in user setting their own password, old one first."""
+
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True)
+
+    def validate_current_password(self, value):
+        if not self.context['request'].user.check_password(value):
+            raise serializers.ValidationError('That is not your current password.')
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        validate_password(value, user)
+        if user.check_password(value):
+            raise serializers.ValidationError('Choose a password you have not used here before.')
+        return value
+
+    def save(self):
+        user = self.context['request'].user
+        user.set_password(self.validated_data['new_password'])
+        user.must_change_password = False
+        user.save(update_fields=['password', 'must_change_password'])
+        return user
+
+
+class GenerateAdminLoginSerializer(serializers.Serializer):
+    """A new platform admin, made from an email address. The server makes the password."""
+
+    email = serializers.EmailField()
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError('A user with this email already exists.')
+        return value

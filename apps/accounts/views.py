@@ -1,9 +1,15 @@
+import secrets
+import string
+
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.hashers import check_password
-from .serializers import AdminCreateUserSerializer, OnboardSerializer, SelfUpdateSerializer, UserSerializer
+from .serializers import (
+    AdminCreateUserSerializer, ChangePasswordSerializer, GenerateAdminLoginSerializer,
+    OnboardSerializer, SelfUpdateSerializer, UserSerializer,
+)
 from .models import User
 from .sessions import start_session, end_session
 from apps.base.encryption import hash_value
@@ -65,6 +71,72 @@ class AdminCreateUserView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         return Response(UserSerializer(user).data, status=201)
+
+
+PASSWORD_SYMBOLS = '!@#$%&*?'
+
+
+def generate_password(length=16):
+    """A random password that passes the validators: mixed case, a digit and a symbol."""
+    alphabet = string.ascii_letters + string.digits + PASSWORD_SYMBOLS
+    chars = [
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.digits),
+        secrets.choice(PASSWORD_SYMBOLS),
+    ]
+    chars += [secrets.choice(alphabet) for _ in range(max(0, length - len(chars)))]
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
+
+
+class ChangePasswordView(generics.GenericAPIView):
+    """Change your own password. Also clears the must-change flag from a generated one."""
+    serializer_class = ChangePasswordSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({'detail': 'Password changed. Use the new one next time you sign in.'})
+
+
+class AdminGenerateLoginView(generics.GenericAPIView):
+    """Super admin makes another admin from an email. The password comes back once, to hand over."""
+    serializer_class = GenerateAdminLoginSerializer
+    permission_classes = (permissions.IsAuthenticated, IsSuperAdmin)
+
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        email = data['email']
+
+        base = email.split('@')[0][:30] or 'admin'
+        username = base
+        counter = 1
+        while User.objects.filter(username__iexact=username).exists():
+            username = f'{base}{counter}'
+            counter += 1
+
+        password = generate_password()
+        user = User(
+            username=username,
+            email=email,
+            first_name=data.get('first_name', ''),
+            last_name=data.get('last_name', ''),
+            role='super_admin',
+            is_staff=True,
+            must_change_password=True,
+        )
+        user.set_password(password)
+        user.save()
+        return Response({
+            'user': UserSerializer(user).data,
+            'email': user.email,
+            'password': password,
+        }, status=status.HTTP_201_CREATED)
 
 class MeView(generics.RetrieveUpdateAPIView):
     def get_serializer_class(self):

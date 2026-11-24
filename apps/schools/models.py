@@ -81,6 +81,12 @@ class School(BaseUUIDModel):
     single_device_students = models.BooleanField(default=True)
     status = models.CharField(max_length=20, default='active')
     trial_ends_at = models.DateTimeField(null=True, blank=True)
+    # Billing (apps.billing). `paid_blocks` is what the school has bought for the current
+    # term; `access_until` is copied from the latest payment and never recalculated.
+    paid_blocks = models.PositiveIntegerField(default=0)
+    access_until = models.DateField(null=True, blank=True)
+    # The count given at onboarding, used for the first quote until real students are added.
+    declared_students = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

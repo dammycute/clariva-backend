@@ -21,6 +21,7 @@ urlpatterns = [
     path('api/audit/', include('apps.audit.urls')),
     path('api/portal/', include('apps.guardian.urls')),
     path('api/leads/', include('apps.leads.urls')),
+    path('api/billing/', include('apps.billing.urls')),
 ]
 
 if settings.ENABLE_ADMIN:

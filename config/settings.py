@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'apps.audit',
     'apps.guardian',
     'apps.leads',
+    'apps.billing',
 ]
 
 MIDDLEWARE = [
@@ -166,6 +167,17 @@ X_FRAME_OPTIONS = 'DENY'
 RESEND_API_KEY = config('RESEND_API_KEY', default='')
 DEMO_NOTIFY_EMAIL = config('DEMO_NOTIFY_EMAIL', default='')
 DEMO_FROM_EMAIL = config('DEMO_FROM_EMAIL', default='Clariva <onboarding@resend.dev>')
+
+# Billing (apps.billing). Ship dark: BILLING_ENFORCE stays false until every existing
+# school has been covered, then it is switched on per environment.
+BILLING_ENFORCE = config('BILLING_ENFORCE', default=False, cast=bool)
+PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY', default='')
+PAYSTACK_PUBLIC_KEY = config('PAYSTACK_PUBLIC_KEY', default='')
+# The webhook signing secret (whsec_...). Separate from the secret key on purpose.
+PAYSTACK_SIGNING_SECRET = config('PAYSTACK_SIGNING_SECRET', default='')
+PAYSTACK_CALLBACK_URL = config('PAYSTACK_CALLBACK_URL', default='')
+BILLING_CRON_SECRET = config('BILLING_CRON_SECRET', default='')
+BILLING_FROM_EMAIL = config('BILLING_FROM_EMAIL', default=DEMO_FROM_EMAIL)
 
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())

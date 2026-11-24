@@ -31,6 +31,9 @@ class User(AbstractUser):
     lga_of_origin = EncryptedCharField(max_length=100, null=True, blank=True)
     state_of_origin = EncryptedCharField(max_length=100, null=True, blank=True)
     is_active = models.BooleanField(default=True)
+    # True on accounts made with a generated password: the console asks for a new one
+    # before it lets them in.
+    must_change_password = models.BooleanField(default=False)
     last_login = models.DateTimeField(null=True, blank=True)
     # One device at a time for students (see accounts/sessions.py).
     active_session_id = models.UUIDField(null=True, blank=True, editable=False)

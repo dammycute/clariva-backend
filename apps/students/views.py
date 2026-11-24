@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django.db import transaction
 from django.db.models import Q
 from apps.mixins import SchoolFilterMixin
+from apps.billing.services import check_capacity
 from apps.accounts.models import User, StudentAccessCode
 from apps.staff.permissions import IsSchoolAdminRole
 from apps.permissions import IsStaffRole
@@ -77,7 +78,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
         reader = csv.DictReader(io.StringIO(csv_data))
         reader.fieldnames = [(f or '').strip().lower() for f in (reader.fieldnames or [])]
-        created, errors, students = 0, [], []
+        parsed, errors = [], []
         for i, raw in enumerate(reader, start=2):
             row = {k: (v or '').strip() for k, v in raw.items() if k}
             name = row.get('full_name') or f"{row.get('first_name', '')} {row.get('last_name', '')}".strip()
@@ -90,11 +91,19 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             if class_name and not cls:
                 errors.append(f'Row {i}: class "{class_name}" was not found')
                 continue
+            parsed.append({'row': i, 'name': name, 'first': first, 'last': last.strip(), 'cls': cls, 'data': row})
+
+        # No half imports: if the file does not fit the plan, import nothing at all.
+        check_capacity(school, len(parsed))
+
+        created, students = 0, []
+        for item in parsed:
+            row, name, cls = item['data'], item['name'], item['cls']
             try:
                 with transaction.atomic():
                     adm = next_admission_no(school)
-                    user = User(school=school, username=unique_username(adm), first_name=first,
-                                last_name=last.strip(), gender=row.get('gender') or None, role='student')
+                    user = User(school=school, username=unique_username(adm), first_name=item['first'],
+                                last_name=item['last'], gender=row.get('gender') or None, role='student')
                     user.set_unusable_password()
                     user.save()
                     StudentProfile.objects.create(
@@ -109,7 +118,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                 created += 1
                 students.append({'name': name, 'admission_no': adm})
             except Exception as e:
-                errors.append(f'Row {i}: {e}')
+                errors.append(f'Row {item["row"]}: {e}')
         return Response({'created': created, 'errors': errors, 'students': students})
 
     @action(detail=False, methods=['post'])
@@ -245,6 +254,17 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         return Response(events[:50])
 
     def perform_create(self, serializer):
-        user = serializer.save(role='student', school=self.request.user.school)
+        school = self.request.user.school
+        check_capacity(school, 1)
+        user = serializer.save(role='student', school=school)
         self._log_activity(user, 'created')
         return user
+
+    def perform_update(self, serializer):
+        # Bringing a student back into the active roll takes a place like a new one does.
+        student = serializer.instance
+        profile = getattr(student, 'student_profile', None)
+        new_status = (getattr(serializer, 'initial_data', {}) or {}).get('student_status')
+        if profile is not None and new_status == 'active' and profile.student_status != 'active':
+            check_capacity(student.school, 1)
+        return super().perform_update(serializer)
