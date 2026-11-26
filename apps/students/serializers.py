@@ -50,7 +50,7 @@ def unique_username(admission_no):
 def platform_domain():
     """The domain student and staff addresses are made on."""
     from django.conf import settings
-    return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clariva.ng').strip()
+    return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clarriva.com').strip()
 
 
 def student_credentials(school, admission_no):

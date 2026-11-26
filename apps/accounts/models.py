@@ -40,6 +40,8 @@ class User(AbstractUser):
     session_device_id = models.CharField(max_length=64, blank=True, default='', editable=False)
     session_device = models.CharField(max_length=120, blank=True, default='', editable=False)
     session_started_at = models.DateTimeField(null=True, blank=True, editable=False)
+    # Platform admins: whether to email them about missing term dates. On for every new admin.
+    receives_calendar_reminders = models.BooleanField(default=True)
 
     def __str__(self):
         name = self.get_full_name() or self.username or self.email or 'Unnamed'

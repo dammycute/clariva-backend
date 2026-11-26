@@ -1,3 +1,4 @@
+import logging
 import secrets
 import string
 
@@ -15,6 +16,8 @@ from .models import User
 from .sessions import start_session, end_session
 from apps.base.encryption import hash_value
 from apps.base.mail import send_email
+
+logger = logging.getLogger('apps')
 
 
 class IsSuperAdmin(permissions.BasePermission):
@@ -53,6 +56,11 @@ class OnboardView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        try:
+            from apps.billing.term_dates import alert_new_school
+            alert_new_school(user.school)
+        except Exception:                      # the school is created; a failed alert must not undo that
+            logger.exception('Could not send the new-school term date alert')
         refresh = RefreshToken.for_user(user)
         refresh['role'] = user.role
         refresh.access_token['role'] = user.role
@@ -106,7 +114,7 @@ class ChangePasswordView(generics.GenericAPIView):
 
 def platform_sign_in():
     """Where a platform admin signs in: the bare domain, not a school subdomain."""
-    domain = (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clariva.ng').strip()
+    domain = (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clarriva.com').strip()
     scheme = 'http' if domain == 'localhost' or domain.endswith('.localhost') else 'https'
     return f'{scheme}://{domain}/login'
 

@@ -1,3 +1,4 @@
+import sys
 import os
 from pathlib import Path
 from decouple import config, Csv
@@ -60,6 +61,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First: the load balancer's health check must be answered before host and HTTPS checks.
+    'config.health.HealthCheckMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -178,16 +181,26 @@ PAYSTACK_PUBLIC_KEY = config('PAYSTACK_PUBLIC_KEY', default='')
 PAYSTACK_SIGNING_SECRET = config('PAYSTACK_SIGNING_SECRET', default='')
 PAYSTACK_CALLBACK_URL = config('PAYSTACK_CALLBACK_URL', default='')
 BILLING_CRON_SECRET = config('BILLING_CRON_SECRET', default='')
+CRON_SECRET = config('CRON_SECRET', default='')     # the name Vercel's scheduler uses
 BILLING_FROM_EMAIL = config('BILLING_FROM_EMAIL', default=DEMO_FROM_EMAIL)
 
 # The domain the product runs on. A school's own portal is
 # <subdomain>.<PLATFORM_DOMAIN>, so staff sign in at their school's address
 # instead of coming through the base site first.
-PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='clariva.ng')
+PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='clarriva.com')
 
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())
 CORS_ALLOW_CREDENTIALS = True
+# Every school address under the platform domain, such as https://queens.clarriva.com.
+CORS_ALLOWED_ORIGIN_REGEXES = (
+    [r'^https://[a-z0-9-]+\.' + PLATFORM_DOMAIN.replace('.', r'\.') + r'$'] if PLATFORM_DOMAIN else []
+)
+
+# A test run must never send real email or call Paystack, whatever is in .env.
+if len(sys.argv) > 1 and sys.argv[1] == 'test':
+    RESEND_API_KEY = PAYSTACK_SECRET_KEY = PAYSTACK_SIGNING_SECRET = ''
+    BILLING_ENFORCE = False                   # tests that need the gate switch it on themselves
 
 # DRF
 REST_FRAMEWORK = {

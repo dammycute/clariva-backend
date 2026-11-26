@@ -1,0 +1,21 @@
+# Never put secrets, local data or local tools into the image.
+.env
+.env.*
+*.sqlite3
+*.log
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.vercel/
+Dockerfile
+.dockerignore
+# local one-off scripts and data dumps
+/seed_*.py
+/seed_*.sql
+/clean_grades.py
+/count_subjects.py
+/dedup_grades.py
+/gen_seed_sql.py

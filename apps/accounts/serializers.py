@@ -75,11 +75,8 @@ class OnboardSerializer(serializers.ModelSerializer):
         return value
 
     def validate_school_subdomain(self, value):
-        from apps.schools.models import School
-        slug = value.lower().strip()
-        if School.objects.filter(subdomain=slug).exists():
-            raise serializers.ValidationError('This subdomain is already taken.')
-        return slug
+        from apps.schools.serializers import clean_subdomain
+        return clean_subdomain(value)
 
     def validate_school_state(self, value):
         """The state must come from the list the app already has, so billing can find its calendar."""

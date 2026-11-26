@@ -1,4 +1,5 @@
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework import status
+from rest_framework.exceptions import APIException, AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
@@ -6,6 +7,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
 from .sessions import is_current
+
+# What a user with a generated password may still do: see who they are, change it, leave.
+PASSWORD_CHANGE_PATHS = ('/api/auth/me/', '/api/auth/change-password/', '/api/auth/logout/')
+
+
+class PasswordChangeRequired(APIException):
+    status_code = status.HTTP_403_FORBIDDEN
+    default_detail = {'detail': 'Choose your own password before you continue.',
+                      'code': 'password_change_required'}
+
 
 REPLACED = {
     'detail': 'You were signed out because your account was opened on another device.',
@@ -24,6 +35,8 @@ class SessionJWTAuthentication(JWTAuthentication):
     def authenticate(self, request):
         result = super().authenticate(request)
         if result is not None:
+            if result[0].must_change_password and request.path not in PASSWORD_CHANGE_PATHS:
+                raise PasswordChangeRequired()
             from apps.billing.services import enforce     # local: keeps app loading clean
             enforce(result[0], request)
         return result

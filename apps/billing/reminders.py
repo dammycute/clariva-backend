@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.schools.models import School
 from .emails import send_reminder
 from .services import GRACE_DAYS, billing_state, school_billing
+from .term_dates import send_digest
 
 DEDUPE_SECONDS = 12 * 60 * 60
 
@@ -28,7 +29,7 @@ def _send_once(school, kind, days):
 def run(today=None):
     """Send whatever is due today. Returns how many went out."""
     today = today or timezone.localdate()
-    sent = 0
+    sent = send_digest(today)                   # the platform admins: term dates still needed
     schools = School.objects.exclude(status__in=('suspended', 'inactive')).select_related()
     for school in schools:
         info = school_billing(school.pk)

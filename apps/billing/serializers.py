@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 
 from apps.schools.models import TERM_CHOICES, School
@@ -7,12 +9,25 @@ from .models import Payment, TermCalendar
 class TermCalendarSerializer(serializers.ModelSerializer):
     state_name = serializers.CharField(source='state.name', read_only=True)
     school_name = serializers.CharField(source='school.name', read_only=True, default=None)
+    confirmed_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = TermCalendar
         fields = ('id', 'state', 'state_name', 'school', 'school_name', 'academic_year',
-                  'term', 'resumes_on', 'provisional', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'created_at', 'updated_at')
+                  'term', 'resumes_on', 'provisional', 'source_url', 'confirmed_by_name',
+                  'confirmed_at', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'confirmed_at', 'created_at', 'updated_at')
+        validators = []                  # uniqueness is checked below, with a clearer message
+
+    def get_confirmed_by_name(self, obj):
+        user = obj.confirmed_by
+        return (user.get_full_name() or user.email) if user else None
+
+    def validate_academic_year(self, value):
+        match = re.fullmatch(r'(\d{4})/(\d{4})', str(value).strip())
+        if not match or int(match.group(2)) != int(match.group(1)) + 1:
+            raise serializers.ValidationError('Write the academic year like 2026/2027.')
+        return value.strip()
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -20,6 +35,11 @@ class TermCalendarSerializer(serializers.ModelSerializer):
         school = attrs.get('school', getattr(self.instance, 'school', None))
         year = attrs.get('academic_year', getattr(self.instance, 'academic_year', None))
         term = attrs.get('term', getattr(self.instance, 'term', None))
+        # A confirmed date needs the state's notice as proof.
+        provisional = attrs.get('provisional', getattr(self.instance, 'provisional', False))
+        if not provisional and not attrs.get('source_url', getattr(self.instance, 'source_url', '')):
+            raise serializers.ValidationError({'source_url': (
+                'Paste the link to the official notice, or mark the date as provisional.')})
         clash = TermCalendar.objects.filter(
             state=state, school=school, academic_year=year, term=term,
         )

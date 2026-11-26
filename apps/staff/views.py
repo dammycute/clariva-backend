@@ -15,7 +15,7 @@ from .permissions import IsSchoolAdminRole
 
 def _platform_domain():
     from django.conf import settings
-    return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clariva.ng').strip()
+    return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clarriva.com').strip()
 
 
 def _as_date(value):

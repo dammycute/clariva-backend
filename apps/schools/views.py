@@ -154,8 +154,12 @@ class SchoolViewSet(viewsets.ModelViewSet):
         return School.objects.filter(pk=user.school_id)
 
     def get_permissions(self):
-        if self.action in ('update', 'partial_update', 'destroy', 'create'):
+        if self.action in ('destroy', 'create'):
             return [permissions.IsAuthenticated(), IsSuperAdmin()]
+        if self.action in ('update', 'partial_update'):
+            # School admins reach only their own school (get_queryset), and only the safe
+            # fields (SchoolSerializer.get_fields).
+            return [permissions.IsAuthenticated(), IsSchoolAdminRole()]
         if self.action == 'backup':
             return [permissions.IsAuthenticated(), IsSchoolAdminRole()]
         if self.action == 'grading' and self.request.method in ('PUT', 'PATCH'):

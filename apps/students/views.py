@@ -126,8 +126,17 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                 'error': 'Choose one of your classes for these students, or add a class column.',
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        # No half imports: if the file does not fit the plan, import nothing at all.
-        check_capacity(school, len(parsed))
+        with transaction.atomic():
+            # No half imports: if the file does not fit the plan, import nothing at all.
+            check_capacity(school, len(parsed))
+            created, students = self._create_imported(school, parsed, default_class_id, errors)
+        return Response({'created': created, 'errors': errors, 'students': students})
+
+    def _create_imported(self, school, parsed, default_class_id, errors):
+        """Create the rows that passed the checks. One bad row is reported, not fatal."""
+        from apps.base.encryption import hash_value
+        from apps.students.models import StudentProfile
+        from .serializers import next_admission_no, student_credentials
 
         created, students = 0, []
         for item in parsed:
@@ -157,7 +166,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                                  'email': email, 'password': password})
             except Exception as e:
                 errors.append(f'Row {item["row"]}: {e}')
-        return Response({'created': created, 'errors': errors, 'students': students})
+        return created, students
 
     @action(detail=False, methods=['post'])
     def promote(self, request):
@@ -317,8 +326,9 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                 raise PermissionDenied('Choose one of your classes for this student.')
             if not Class.objects.filter(pk=class_id, school=school, form_teacher=user).exists():
                 raise PermissionDenied('You can only add students to your own class.')
-        check_capacity(school, 1)
-        user = serializer.save(role='student', school=school)
+        with transaction.atomic():
+            check_capacity(school, 1)
+            user = serializer.save(role='student', school=school)
         self._log_activity(user, 'created')
         return user
 
@@ -327,6 +337,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         student = serializer.instance
         profile = getattr(student, 'student_profile', None)
         new_status = (getattr(serializer, 'initial_data', {}) or {}).get('student_status')
-        if profile is not None and new_status == 'active' and profile.student_status != 'active':
-            check_capacity(student.school, 1)
-        return super().perform_update(serializer)
+        with transaction.atomic():
+            if profile is not None and new_status == 'active' and profile.student_status != 'active':
+                check_capacity(student.school, 1)
+            return super().perform_update(serializer)

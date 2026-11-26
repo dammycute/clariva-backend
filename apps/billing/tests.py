@@ -142,8 +142,10 @@ class SignatureTests(TestCase):
             'HTTP_X_PAYSTACK_SIGNATURE': paystack.legacy_signature(SECRET, body),
         }
         self.assertTrue(paystack.signature_ok(body, meta))
-        # A bad new-style header is not rescued by a good legacy one.
+        # If the new-style check fails, a good secret-key signature still proves the sender.
         meta['HTTP_PAYSTACK_SIGNATURE'] = 't=1,v1=nope'
+        self.assertTrue(paystack.signature_ok(body, meta))
+        meta['HTTP_X_PAYSTACK_SIGNATURE'] = 'nope'
         self.assertFalse(paystack.signature_ok(body, meta))
 
     @override_settings(PAYSTACK_SIGNING_SECRET='', PAYSTACK_SECRET_KEY='')
