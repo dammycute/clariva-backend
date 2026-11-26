@@ -113,3 +113,46 @@ class StudentAccountsTest(TestCase):
         res = self.api.post('/api/students/import_csv/', {'csv': 'full_name\nFive Six\n'}, format='json')
         self.assertEqual(res.json()['created'], 1, res.content)
         self.assertEqual(res.json()['errors'], [])
+
+class TeacherRosterTest(TestCase):
+    """A form teacher adds and imports students into their own class only."""
+
+    def setUp(self):
+        self.school = School.objects.create(name='Queens T', subdomain='queens-teach')
+        self.mine = Class.objects.create(school=self.school, name='JSS1A', year_group='JSS1', arm='A')
+        self.other = Class.objects.create(school=self.school, name='JSS1B', year_group='JSS1', arm='B')
+        self.teacher = User.objects.create_user(username='t1', email='t1@t.com', password='pass1234',
+                                                school=self.school, role='teacher')
+        self.mine.form_teacher = self.teacher
+        self.mine.save()
+        self.api = APIClient()
+        self.api.force_authenticate(user=self.teacher)
+
+    def test_a_form_teacher_adds_a_student_to_their_own_class(self):
+        res = self.api.post('/api/students/', {'first_name': 'Ada', 'last_name': 'Obi',
+                                               'class_group': str(self.mine.id)}, format='json')
+        self.assertEqual(res.status_code, 201, res.content)
+        self.assertEqual(StudentProfile.objects.get(user_id=res.json()['id']).class_group, self.mine)
+
+    def test_a_form_teacher_cannot_add_to_another_class(self):
+        res = self.api.post('/api/students/', {'first_name': 'Ada', 'last_name': 'Obi',
+                                               'class_group': str(self.other.id)}, format='json')
+        self.assertEqual(res.status_code, 403, res.content)
+
+    def test_a_form_teacher_imports_into_their_own_class(self):
+        res = self.api.post('/api/students/import_csv/',
+                            {'csv': 'full_name,gender\nAda Obi,Female\n', 'class_id': str(self.mine.id)},
+                            format='json')
+        self.assertEqual(res.status_code, 200, res.content)
+        body = res.json()
+        self.assertEqual(body['created'], 1)
+        self.assertTrue(body['students'][0]['password'])
+        self.assertEqual(StudentProfile.objects.filter(class_group=self.mine).count(), 1)
+
+    def test_a_form_teacher_cannot_import_into_another_class(self):
+        res = self.api.post('/api/students/import_csv/',
+                            {'csv': 'full_name\nAda Obi\n', 'class_id': str(self.other.id)},
+                            format='json')
+        self.assertEqual(res.status_code, 403, res.content)
+        self.assertEqual(StudentProfile.objects.count(), 0)
+

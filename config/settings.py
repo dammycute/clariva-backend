@@ -162,8 +162,9 @@ if not DEBUG:
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# Demo requests from the landing page are emailed to the owner through Resend.
-# Without the key the request is still saved; only the email is skipped.
+# Demo requests from the landing page are emailed through Resend. Without the key the
+# request is still saved; only the email is skipped. DEMO_NOTIFY_EMAIL takes a
+# comma-separated list; when it is empty the platform admins are emailed instead.
 RESEND_API_KEY = config('RESEND_API_KEY', default='')
 DEMO_NOTIFY_EMAIL = config('DEMO_NOTIFY_EMAIL', default='')
 DEMO_FROM_EMAIL = config('DEMO_FROM_EMAIL', default='Clariva <onboarding@resend.dev>')
@@ -178,6 +179,11 @@ PAYSTACK_SIGNING_SECRET = config('PAYSTACK_SIGNING_SECRET', default='')
 PAYSTACK_CALLBACK_URL = config('PAYSTACK_CALLBACK_URL', default='')
 BILLING_CRON_SECRET = config('BILLING_CRON_SECRET', default='')
 BILLING_FROM_EMAIL = config('BILLING_FROM_EMAIL', default=DEMO_FROM_EMAIL)
+
+# The domain the product runs on. A school's own portal is
+# <subdomain>.<PLATFORM_DOMAIN>, so staff sign in at their school's address
+# instead of coming through the base site first.
+PLATFORM_DOMAIN = config('PLATFORM_DOMAIN', default='clariva.ng')
 
 # CORS
 CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000', cast=Csv())

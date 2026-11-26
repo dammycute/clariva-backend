@@ -120,6 +120,48 @@ class StudentSubjectViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
 # ─── DOCX helpers ─────────────────────────────────────────────────
 
+def _apply_document_metadata(exam, meta, school):
+    """Set the exam up from the paper's own header.
+
+    The teacher uploads a paper titled "SS1 Mathematics First Term Examination" with
+    DURATION and PASS MARK lines; the exam takes those details instead of making the
+    teacher retype them.
+    """
+    from apps.classes.models import Class
+
+    applied, fields = {}, []
+    title = (meta.get('title') or '').strip()
+    if title and title != exam.title:
+        exam.title = title[:255]
+        fields.append('title')
+        applied['title'] = exam.title
+    duration = meta.get('duration_mins')
+    if duration and duration != exam.duration_mins:
+        exam.duration_mins = duration
+        fields.append('duration_mins')
+        applied['duration_mins'] = duration
+    pass_mark = meta.get('pass_mark')
+    if pass_mark is not None and 0 <= pass_mark <= 100 and pass_mark != exam.pass_mark:
+        exam.pass_mark = pass_mark
+        fields.append('pass_mark')
+        applied['pass_mark'] = pass_mark
+    instructions = (meta.get('instructions') or '').strip()
+    if instructions and instructions != (exam.instructions or ''):
+        exam.instructions = instructions
+        fields.append('instructions')
+        applied['instructions'] = instructions
+    class_name = (meta.get('class_group') or '').strip()
+    if class_name and school is not None:
+        match = Class.objects.filter(school=school, name__iexact=class_name).first()
+        if match and exam.class_group_id != match.pk:
+            exam.class_group = match
+            fields.append('class_group')
+            applied['class_group'] = match.name
+    if fields:
+        exam.save(update_fields=fields)
+    return applied
+
+
 def _make_docx_bytes(paragraphs: list[tuple[str, bool]]) -> bytes:
     """
     Build a minimal DOCX file in memory.
@@ -631,7 +673,7 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         replace = request.query_params.get('replace', '').lower() == 'true'
-        warnings = []
+        warnings = list(result.get('warnings') or [])
         errors = []
 
         if replace:
@@ -658,7 +700,17 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             except Exception as e:
                 errors.append(f'Question {idx}: {str(e)}')
 
-        return Response({'created': created, 'replaced': replace, 'errors': errors, 'warnings': warnings})
+        applied = _apply_document_metadata(
+            exam, result.get('metadata') or {}, request.user.school,
+        )
+        return Response({
+            'created': created,
+            'replaced': replace,
+            'errors': errors,
+            'warnings': warnings,
+            'applied': applied,
+            'answer_key_found': result.get('answer_key_found', False),
+        })
 
     @action(detail=False, methods=['get'])
     def question_template(self, request):

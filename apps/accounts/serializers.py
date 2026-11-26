@@ -1,5 +1,6 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User
 from .sessions import start_session
@@ -12,9 +13,20 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         self.fields['email'] = serializers.CharField()
 
     def validate(self, attrs):
+        # A school's own address sends its subdomain, so an account from another
+        # school cannot sign in at the wrong door.
+        school = ''
+        if isinstance(getattr(self, 'initial_data', None), dict):
+            school = str(self.initial_data.get('school') or '').strip().lower()
         attrs['username'] = attrs.pop('email')
         data = super().validate(attrs)
         user = self.user
+        if school and user.role != 'super_admin':
+            own = (user.school.subdomain or '').lower() if user.school_id else ''
+            if own != school:
+                raise AuthenticationFailed(
+                    'This account does not belong to this school. Sign in at your own school address.'
+                )
         request = self.context.get('request')
         device_id = request.data.get('device_id', '') if request is not None else ''
         if start_session(user, request, device_id):

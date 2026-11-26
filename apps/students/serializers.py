@@ -1,4 +1,6 @@
 import re
+import secrets
+import string
 from datetime import date
 
 from django.db import transaction
@@ -43,6 +45,29 @@ def unique_username(admission_no):
         username = f'{base}{n}'
         n += 1
     return username
+
+
+def platform_domain():
+    """The domain student and staff addresses are made on."""
+    from django.conf import settings
+    return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clariva.ng').strip()
+
+
+def student_credentials(school, admission_no):
+    """The username, email and password a new student signs in with.
+
+    The address uses the school's own subdomain, so it points at the school's
+    portal and cannot collide with another school's student.
+    """
+    suffix = sanitize_admission(admission_no)
+    username = unique_username(admission_no)
+    domain = platform_domain()
+    email, n = f'{suffix}@{school.subdomain}.{domain}', 1
+    while User.objects.filter(email__iexact=email).exists():
+        email = f'{suffix}{n}@{school.subdomain}.{domain}'
+        n += 1
+    password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+    return username, email, password
 
 
 class StudentSerializer(serializers.ModelSerializer):

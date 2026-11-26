@@ -21,8 +21,9 @@ from .models import Payment, TermCalendar
 from .serializers import ManualPaymentSerializer, PaymentSerializer, TermCalendarSerializer
 from .services import (
     PAYMENT_WINDOW_DAYS, apply_manual_payment, billing_state, blocks_for, capacity,
-    create_payment, fulfil_payment, invalidate, price_for_blocks, quote_students,
-    school_billing, status_payload, term_to_pay, term_window,
+    create_payment, fallback_window, fulfil_payment, invalidate, limit_for_blocks,
+    price_for_blocks, quote_students, school_billing, status_payload, term_to_pay,
+    term_window,
 )
 
 logger = logging.getLogger('apps')
@@ -97,7 +98,7 @@ class InitializePaymentView(APIView):
             blocks = blocks_for(students)
             if blocks <= school.paid_blocks:
                 raise PaymentProblem(
-                    f'Your plan already covers {school.paid_blocks * 50 + 10} students.',
+                    f'Your plan already covers {limit_for_blocks(school.paid_blocks)} students.',
                     code='no_upgrade_needed',
                 )
             amount = price_for_blocks(blocks - school.paid_blocks) * 100
@@ -115,10 +116,8 @@ class InitializePaymentView(APIView):
             academic_year, term = term_to_pay(school)
             window = term_window(school.state, school, academic_year, term)
             if window is None:
-                raise PaymentProblem(
-                    "Your state's term dates are not published yet. We will contact you.",
-                    code='missing_calendar',
-                )
+                # Nothing published for this state: sell one term from today.
+                window = fallback_window(academic_year, term, today)
             opens_on = window['resumes_on'] - timedelta(days=PAYMENT_WINDOW_DAYS)
             if today < opens_on and state not in ('grace', 'lapsed'):
                 raise PaymentProblem(
@@ -318,10 +317,7 @@ class ManualPaymentView(APIView):
             term = data.get('term') or school.current_term
             window = term_window(school.state, school, academic_year, term)
             if window is None:
-                raise PaymentProblem(
-                    'Set this state\'s term dates first, or pass access_until.',
-                    code='missing_calendar',
-                )
+                window = fallback_window(academic_year, term, today)
             students = data.get('students') or quote_students(school)
             if not students:
                 raise PaymentProblem('Say how many students this covers.', code='students_required')
@@ -355,7 +351,7 @@ class BlocksOverrideView(APIView):
         school.paid_blocks = blocks
         school.save(update_fields=['paid_blocks'])      # the audit signal logs this write
         invalidate(school.pk)
-        return Response({'blocks': blocks, 'limit': blocks * 50 + 10,
+        return Response({'blocks': blocks, 'limit': limit_for_blocks(blocks),
                          'capacity': capacity(School.objects.get(pk=school.pk))})
 
 

@@ -5,6 +5,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
 from django.contrib.auth.hashers import check_password
 from .serializers import (
     AdminCreateUserSerializer, ChangePasswordSerializer, GenerateAdminLoginSerializer,
@@ -13,6 +14,7 @@ from .serializers import (
 from .models import User
 from .sessions import start_session, end_session
 from apps.base.encryption import hash_value
+from apps.base.mail import send_email
 
 
 class IsSuperAdmin(permissions.BasePermission):
@@ -102,8 +104,18 @@ class ChangePasswordView(generics.GenericAPIView):
         return Response({'detail': 'Password changed. Use the new one next time you sign in.'})
 
 
+def platform_sign_in():
+    """Where a platform admin signs in: the bare domain, not a school subdomain."""
+    domain = (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clariva.ng').strip()
+    scheme = 'http' if domain == 'localhost' or domain.endswith('.localhost') else 'https'
+    return f'{scheme}://{domain}/login'
+
+
 class AdminGenerateLoginView(generics.GenericAPIView):
-    """Super admin makes another admin from an email. The password comes back once, to hand over."""
+    """Super admin makes another admin from an email.
+
+    The login details are emailed to that address, and also come back once, so the
+    password can still be handed over when the email could not be sent."""
     serializer_class = GenerateAdminLoginSerializer
     permission_classes = (permissions.IsAuthenticated, IsSuperAdmin)
 
@@ -132,10 +144,23 @@ class AdminGenerateLoginView(generics.GenericAPIView):
         )
         user.set_password(password)
         user.save()
+        name = f'{user.first_name} {user.last_name}'.strip() or user.email
+        emailed = send_email(
+            user.email, 'Your Clariva admin login',
+            '\n'.join([
+                f'Hello {name},', '',
+                'An admin account has been created for you on Clariva.', '',
+                f'Sign in at: {platform_sign_in()}',
+                f'Email: {user.email}',
+                f'Password: {password}', '',
+                'You will choose your own password the first time you sign in.',
+            ]),
+        )
         return Response({
             'user': UserSerializer(user).data,
             'email': user.email,
             'password': password,
+            'emailed': emailed,
         }, status=status.HTTP_201_CREATED)
 
 class MeView(generics.RetrieveUpdateAPIView):

@@ -2,6 +2,7 @@ import json
 from io import StringIO
 from django.core import serializers as dj_serializers
 from django.core.management import call_command
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import api_view, permission_classes, action
@@ -21,6 +22,116 @@ class IsSuperAdmin(permissions.BasePermission):
             and request.user.is_authenticated
             and request.user.role == 'super_admin'
         )
+
+
+# --------------------------------------------------------------- the school's own address
+
+def _host_only(request):
+    """The bare host the browser used, without the port."""
+    return (request.get_host() or '').split(':')[0].strip().lower()
+
+
+def base_domain(host=''):
+    """The domain the product runs on: from settings, or worked out from the host.
+
+    A deployment at app.clariva.ng answers with clariva.ng, so the subdomain it builds
+    is the one that will actually resolve.
+    """
+    host = (host or '').split(':')[0].lower()
+    # Development first: every *.localhost address already points at this computer.
+    if host and (host in ('localhost', '127.0.0.1') or host.endswith('.localhost')):
+        return 'localhost'
+    configured = (getattr(settings, 'PLATFORM_DOMAIN', '') or '').strip().lower()
+    if configured:
+        return configured
+    if not host:
+        return ''
+    parts = host.split('.')
+    if len(parts) > 2 and parts[0] in ('www', 'app', 'portal', 'admin', 'api', 'school'):
+        parts = parts[1:]
+    return '.'.join(parts)
+
+
+def subdomain_from_host(host, base):
+    """'queens.clariva.ng' with base 'clariva.ng' gives 'queens'; the bare domain gives ''."""
+    host = (host or '').split(':')[0].lower()
+    base = (base or '').lower()
+    if not host or not base or host == base:
+        return ''
+    if host.endswith('.' + base):
+        sub = host[: -(len(base) + 1)]
+        return sub if sub and '.' not in sub else ''
+    return ''
+
+
+def portal_url_for(school, base):
+    """The address this school's portal lives at, or '' when no domain is known."""
+    if not base or not school.subdomain:
+        return ''
+    scheme = 'http' if base == 'localhost' or base.endswith('.localhost') else 'https'
+    return f'{scheme}://{school.subdomain}.{base}'
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def school_by_domain(request):
+    """Which school owns the address the browser is on.
+
+    The web app asks this on a school's subdomain so the sign-in page can carry that
+    school's name and colours, and send the subdomain back with the login.
+    """
+    # The browser tells us the address it is on: the API usually answers on another host.
+    host = (request.query_params.get('host') or _host_only(request) or '')
+    host = host.split(':')[0].strip().lower()
+    base = base_domain(host)
+    sub = subdomain_from_host(host, base)
+    if not sub:
+        return Response({'found': False, 'subdomain': None, 'base_domain': base, 'school': None})
+    school = School.objects.filter(subdomain__iexact=sub).first()
+    if school is None:
+        return Response({'found': False, 'subdomain': sub, 'base_domain': base, 'school': None})
+    return Response({
+        'found': True,
+        'subdomain': school.subdomain,
+        'base_domain': base,
+        'school': {
+            'id': str(school.pk),
+            'name': school.name,
+            'subdomain': school.subdomain,
+            'logo_url': school.logo_url,
+            'accent_color': school.accent_color,
+            'portal_url': portal_url_for(school, base),
+        },
+    })
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def portal_address(request):
+    """The address this school's portal lives at, built from the domain the site runs on.
+
+    The super admin asks for any school with ?school=<id>; a school admin gets its own.
+    """
+    if request.user.role == 'super_admin' and request.query_params.get('school'):
+        school = School.objects.filter(pk=request.query_params['school']).first()
+        if school is None:
+            return Response({'error': 'School not found.'}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        if not request.user.school_id:
+            return Response({'error': 'No school is assigned to your account.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        school = request.user.school
+
+    host = _host_only(request)
+    base = base_domain(host)
+    return Response({
+        'base_domain': base,
+        'current_host': host,
+        'subdomain': school.subdomain,
+        'url': portal_url_for(school, base),
+        'wildcard_record': f'*.{base}' if base else '',
+        'ready': bool(base and school.subdomain),
+    })
 
 
 class SchoolViewSet(viewsets.ModelViewSet):

@@ -1,7 +1,8 @@
 """The billing rules, in one place.
 
-Price: ₦30,000 per term for each block of 50 students, with 10 free places on top of
-each block. A paid term covers the school until 21 days after the next term resumes.
+Price: ₦30,000 per term for each block of 50 students. The 10 free places belong to
+the school, not to each block: one block covers 60 students, two cover 110, six cover
+310. A paid term covers the school until 21 days after the next term resumes.
 
 Nothing here reads the request; the views and the authentication hook call in.
 """
@@ -21,8 +22,9 @@ from .models import Payment, TermCalendar
 
 PRICE_PER_BLOCK = 30000          # naira
 BLOCK_SIZE = 50
-BUFFER_STUDENTS = 10             # free places on top of every block
+BUFFER_STUDENTS = 10             # free places for the school, once — not per block
 GRACE_DAYS = 21                  # after the next term resumes
+TERM_DAYS = 91                   # a term is about thirteen weeks
 PAYMENT_WINDOW_DAYS = 60         # how early a school may pay
 CACHE_TTL = 60                   # seconds; the entitlement check reads this
 
@@ -44,11 +46,12 @@ EXEMPT_PREFIXES = (
 def blocks_for(students: int) -> int:
     """How many blocks of 50 a school with this many students pays for.
 
-    1 to 60 students is one block; 61 starts the second. Zero is refused.
+    The buffer is subtracted once, whatever the size of the school: 60 students is
+    one block, 61 starts the second, 300 is six and 700 is fourteen. Zero is refused.
     """
     if students is None or students < 1:
         raise ValueError('A school needs at least one student.')
-    return max(1, math.ceil((students - BUFFER_STUDENTS) / BLOCK_SIZE))
+    return max(1, math.ceil(max(students - BUFFER_STUDENTS, 1) / BLOCK_SIZE))
 
 
 def limit_for_blocks(blocks: int) -> int:
@@ -132,6 +135,28 @@ def term_window(state_name: str, school, academic_year: str, term: str):
         'next_term': next_name,
         'next_resumes_on': following.resumes_on,
         'access_until': following.resumes_on + timedelta(days=GRACE_DAYS),
+    }
+
+
+def fallback_window(academic_year: str, term: str, today=None):
+    """What a payment covers when the state's term dates are not published yet.
+
+    One term from today, plus the usual three-week grace. A school is never stopped
+    from paying because a ministry has not announced its resumption date; the dates
+    are marked provisional and the super admin can correct them later.
+    """
+    today = today or timezone.localdate()
+    next_year, next_name = next_term(academic_year, term)
+    return {
+        'academic_year': academic_year,
+        'term': term,
+        'resumes_on': today,
+        'provisional': True,
+        'assumed': True,
+        'next_academic_year': next_year,
+        'next_term': next_name,
+        'next_resumes_on': today + timedelta(days=TERM_DAYS),
+        'access_until': today + timedelta(days=TERM_DAYS + GRACE_DAYS),
     }
 
 
@@ -369,6 +394,7 @@ def status_payload(school, today=None):
         'payment_opens_on': None,
         'can_pay': False,
         'blocked_reason': None,
+        'dates_provisional': False,
     }
 
     if state == 'suspended':
@@ -389,14 +415,17 @@ def status_payload(school, today=None):
     year, term = term_to_pay(school)
     window = term_window(school.state, school, year, term)
     if window is None:
-        payload['blocked_reason'] = 'missing_calendar'
-        return payload
+        # No published dates for this state: sell one term from today instead of
+        # leaving the school stuck on a disabled Pay button.
+        window = fallback_window(year, term, today)
 
+    payload['dates_provisional'] = bool(window.get('assumed'))
     payload['next_term'] = {
         'academic_year': window['academic_year'],
         'term': window['term'],
         'resumes_on': window['resumes_on'].isoformat(),
         'provisional': window['provisional'],
+        'assumed': bool(window.get('assumed')),
         'next_academic_year': window['next_academic_year'],
         'next_term': window['next_term'],
         'next_resumes_on': window['next_resumes_on'].isoformat(),

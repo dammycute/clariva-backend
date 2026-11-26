@@ -7,10 +7,11 @@ from apps.mixins import SchoolFilterMixin
 from apps.billing.services import check_capacity
 from apps.accounts.models import User, StudentAccessCode
 from apps.staff.permissions import IsSchoolAdminRole
+from rest_framework.exceptions import PermissionDenied
 from apps.permissions import IsStaffRole
 from apps.accounts.sessions import end_session
 from apps.fees.services import FeeService
-from .serializers import StudentSerializer, has_login
+from .serializers import StudentSerializer, has_login, platform_domain
 import secrets
 import string
 
@@ -20,10 +21,15 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     serializer_class = StudentSerializer
 
     def get_permissions(self):
-        admin_only = {'promote', 'bulk_create_accounts', 'import_csv', 'reset_password'}
+        admin_only = {'promote'}
         if self.action in admin_only:
             return [IsSchoolAdminRole()]
-        if self.action == 'sign_out_everywhere':
+        # A form teacher adds students, imports them and hands out the logins for
+        # their own class, so these are open to staff. The checks below still keep
+        # them inside their own class.
+        if self.action in ('bulk_create_accounts', 'reset_password',
+                           'create_account', 'sign_out_everywhere',
+                           'create', 'import_csv'):
             return [IsStaffRole()]
         return super().get_permissions()
 
@@ -39,9 +45,9 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
         # Teacher scoping
         if user.role == 'teacher':
+            # Their form classes only. A teacher with none sees nothing, not everybody.
             teacher_classes = user.class_set.values_list('id', flat=True)
-            if teacher_classes:
-                qs = qs.filter(student_profile__class_group_id__in=teacher_classes)
+            qs = qs.filter(student_profile__class_group_id__in=teacher_classes)
 
         student_status = self.request.query_params.get('status')
         class_id = self.request.query_params.get('class_id')
@@ -67,7 +73,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         from apps.classes.models import Class
         from apps.base.encryption import hash_value
         from apps.students.models import StudentProfile
-        from .serializers import next_admission_no, unique_username
+        from .serializers import next_admission_no, student_credentials, unique_username
 
         csv_data = (request.data.get('csv', '') or '').lstrip('﻿')
         default_class_id = request.data.get('class_id') or None
@@ -75,9 +81,27 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         classes = {c.name.strip().lower(): c for c in Class.objects.filter(school=school)}
         if default_class_id and not Class.objects.filter(pk=default_class_id, school=school).exists():
             return Response({'error': 'Choose a class from your school.'}, status=status.HTTP_400_BAD_REQUEST)
+        # A form teacher imports into their own class only, never another teacher's.
+        my_class_ids = None
+        if request.user.role == 'teacher':
+            my_class_ids = {str(c) for c in Class.objects.filter(
+                school=school, form_teacher=request.user).values_list('id', flat=True)}
+            if not my_class_ids:
+                return Response({
+                    'error': 'No class is assigned to you yet. Ask the school admin to set you as the form teacher.',
+                }, status=status.HTTP_403_FORBIDDEN)
+            if default_class_id and str(default_class_id) not in my_class_ids:
+                return Response({'error': 'That class is not one of yours.'},
+                                status=status.HTTP_403_FORBIDDEN)
 
         reader = csv.DictReader(io.StringIO(csv_data))
         reader.fieldnames = [(f or '').strip().lower() for f in (reader.fieldnames or [])]
+        headers = [f for f in (reader.fieldnames or []) if f]
+        if headers and not ({'full_name', 'first_name', 'last_name'} & set(headers)):
+            return Response({
+                'error': 'The first row must name the columns. No name column was found. '
+                         f'Saw: {", ".join(headers)}. Use full_name, or first_name and last_name.',
+            }, status=status.HTTP_400_BAD_REQUEST)
         parsed, errors = [], []
         for i, raw in enumerate(reader, start=2):
             row = {k: (v or '').strip() for k, v in raw.items() if k}
@@ -91,7 +115,16 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             if class_name and not cls:
                 errors.append(f'Row {i}: class "{class_name}" was not found')
                 continue
+            if cls and my_class_ids is not None and str(cls.id) not in my_class_ids:
+                errors.append(f'Row {i}: class "{class_name}" is not one of your classes')
+                continue
             parsed.append({'row': i, 'name': name, 'first': first, 'last': last.strip(), 'cls': cls, 'data': row})
+
+        if my_class_ids is not None and parsed and not default_class_id \
+                and all(item['cls'] is None for item in parsed):
+            return Response({
+                'error': 'Choose one of your classes for these students, or add a class column.',
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # No half imports: if the file does not fit the plan, import nothing at all.
         check_capacity(school, len(parsed))
@@ -102,9 +135,13 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             try:
                 with transaction.atomic():
                     adm = next_admission_no(school)
-                    user = User(school=school, username=unique_username(adm), first_name=item['first'],
-                                last_name=item['last'], gender=row.get('gender') or None, role='student')
-                    user.set_unusable_password()
+                    username, email, password = student_credentials(school, adm)
+                    user = User(school=school, username=username, email=email,
+                                first_name=item['first'], last_name=item['last'],
+                                gender=row.get('gender') or None, role='student')
+                    # The import makes a working login, not just a record.
+                    user.set_password(password)
+                    user.must_change_password = True
                     user.save()
                     StudentProfile.objects.create(
                         user=user, school=school, admission_no=adm, admission_no_hash=hash_value(adm),
@@ -116,7 +153,8 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                     )
                 FeeService.invoice_student(user)
                 created += 1
-                students.append({'name': name, 'admission_no': adm})
+                students.append({'name': name, 'admission_no': adm,
+                                 'email': email, 'password': password})
             except Exception as e:
                 errors.append(f'Row {item["row"]}: {e}')
         return Response({'created': created, 'errors': errors, 'students': students})
@@ -155,7 +193,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         sp = getattr(student, 'student_profile', None)
         identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
         suffix = self._sanitize_admission(identifier)
-        email = f'{suffix}@{student.school.subdomain}.clariva.ng'
+        email = f'{suffix}@{student.school.subdomain}.{platform_domain()}'
         password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
         student.username = self._generate_student_username(identifier, student.school)
         student.email = email
@@ -169,6 +207,12 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         class_id = request.data.get('class_id')
         if not class_id:
             return Response({'error': 'class_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        if request.user.role == 'teacher':
+            from apps.classes.models import Class
+            if not Class.objects.filter(
+                    pk=class_id, form_teacher=request.user, school=request.user.school).exists():
+                return Response({'error': 'That class is not one of yours.'},
+                                status=status.HTTP_403_FORBIDDEN)
         students = User.objects.filter(
             student_profile__class_group_id=class_id, school=request.user.school, role='student',
         ).filter(Q(password='') | Q(password__startswith='!'))
@@ -177,7 +221,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             sp = getattr(student, 'student_profile', None)
             identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
             suffix = self._sanitize_admission(identifier)
-            email = f'{suffix}@{student.school.subdomain}.clariva.ng'
+            email = f'{suffix}@{student.school.subdomain}.{platform_domain()}'
             password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
             student.username = self._generate_student_username(identifier, student.school)
             student.email = email
@@ -202,8 +246,17 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def sign_out_everywhere(self, request, pk=None):
         """Sign the student out of every device. Use it when a device is lost or dead during an
-        exam, or when someone else may be using the account. The student can sign in again at once."""
-        student = self.get_object()
+        exam, or when someone else may be using the account. The student can sign in again at once.
+
+        Any teacher in the school may release any student: a broken phone cannot wait for the
+        form teacher, so this one action looks past the class roster. Other schools stay out.
+        """
+        students = User.objects.filter(pk=pk, role='student')
+        if request.user.role != 'super_admin':
+            students = students.filter(school=request.user.school)
+        student = students.first()
+        if student is None:
+            return Response({'error': 'Student not found'}, status=status.HTTP_404_NOT_FOUND)
         end_session(student)
         return Response({'signed_out': True})
 
@@ -255,6 +308,15 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         school = self.request.user.school
+        user = self.request.user
+        # A form teacher adds students to their own class, never another teacher's.
+        if user.role == 'teacher':
+            from apps.classes.models import Class
+            class_id = (getattr(serializer, 'initial_data', {}) or {}).get('class_group')
+            if not class_id:
+                raise PermissionDenied('Choose one of your classes for this student.')
+            if not Class.objects.filter(pk=class_id, school=school, form_teacher=user).exists():
+                raise PermissionDenied('You can only add students to your own class.')
         check_capacity(school, 1)
         user = serializer.save(role='student', school=school)
         self._log_activity(user, 'created')

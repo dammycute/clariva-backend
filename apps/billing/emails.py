@@ -1,34 +1,9 @@
 """Emails around billing: a receipt after a payment, and the reminders before a new term.
 
-Uses Resend's HTTP API directly, like the demo-request email, so there is no extra package.
-Every send is best effort: a mail problem must never lose or undo a payment.
+Sending itself lives in apps.base.mail. Every send is best effort: a mail problem must
+never lose or undo a payment.
 """
-import json
-import logging
-from urllib.request import Request, urlopen
-
-from django.conf import settings
-
-logger = logging.getLogger('apps')
-
-
-def send_email(to, subject, text) -> bool:
-    key = getattr(settings, 'RESEND_API_KEY', '')
-    sender = getattr(settings, 'BILLING_FROM_EMAIL', '') or settings.DEMO_FROM_EMAIL
-    if not (key and to):
-        return False
-    payload = {'from': sender, 'to': [to], 'subject': subject[:200], 'text': text}
-    req = Request(
-        'https://api.resend.com/emails', data=json.dumps(payload).encode(), method='POST',
-        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json',
-                 'User-Agent': 'clariva-backend'},
-    )
-    try:
-        urlopen(req, timeout=5).close()
-        return True
-    except Exception as exc:
-        logger.warning('Billing email failed: %s', type(exc).__name__)
-        return False
+from apps.base.mail import send_email
 
 
 def admin_email(school):
