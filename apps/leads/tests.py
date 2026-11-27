@@ -5,6 +5,8 @@ from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
+from apps.accounts.models import User
+
 from .models import DemoRequest
 
 URL = '/api/leads/demo/'
@@ -46,7 +48,7 @@ class DemoRequestTest(TestCase):
 
     @override_settings(**MAIL)
     def test_the_owner_is_emailed_through_resend(self):
-        with mock.patch('apps.leads.notify.urlopen') as sent:
+        with mock.patch('apps.base.mail.urlopen') as sent:
             self.post(GOOD)
         req = sent.call_args[0][0]
         body = json.loads(req.data)
@@ -61,16 +63,25 @@ class DemoRequestTest(TestCase):
 
     @override_settings(**MAIL)
     def test_a_failing_email_does_not_lose_the_request(self):
-        with mock.patch('apps.leads.notify.urlopen', side_effect=OSError('down')):
+        with mock.patch('apps.base.mail.urlopen', side_effect=OSError('down')):
             res = self.post(GOOD)
         self.assertEqual(res.status_code, 201)
         self.assertFalse(DemoRequest.objects.get().emailed)
 
     @override_settings(RESEND_API_KEY='', DEMO_NOTIFY_EMAIL='')
     def test_without_email_settings_nothing_is_sent(self):
-        with mock.patch('apps.leads.notify.urlopen') as sent:
+        with mock.patch('apps.base.mail.urlopen') as sent:
             self.assertEqual(self.post(GOOD).status_code, 201)
         sent.assert_not_called()
+
+    @override_settings(RESEND_API_KEY='re_test', DEMO_NOTIFY_EMAIL='')
+    def test_platform_admins_are_emailed_when_no_address_is_configured(self):
+        User.objects.create_user(username='owner', email='owner@example.com',
+                                 password='owner-pass-1', role='super_admin')
+        with mock.patch('apps.base.mail.urlopen') as sent:
+            self.assertEqual(self.post(GOOD).status_code, 201)
+        self.assertEqual(json.loads(sent.call_args[0][0].data)['to'], ['owner@example.com'])
+        self.assertTrue(DemoRequest.objects.get().emailed)
 
     def test_a_sixth_request_in_an_hour_is_refused(self):
         codes = [self.post(GOOD).status_code for _ in range(6)]

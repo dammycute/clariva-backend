@@ -3,7 +3,7 @@
 Everything Paystack takes or gives is JSON over HTTPS. The webhook is signed twice:
 the current `Paystack-Signature` header (a `whsec_` signing secret and a timestamp)
 and, while a secret key exists, the older `x-paystack-signature` (the secret key
-alone). The first is trusted when present; the second is the fallback.
+alone). A delivery is accepted when either one checks out.
 """
 import hashlib
 import hmac
@@ -93,6 +93,20 @@ def _digest(secret, message: bytes) -> str:
     return hmac.new(secret.encode(), message, hashlib.sha512).hexdigest()
 
 
+def _current_signature_ok(header, signing_secret, raw_body, now) -> bool:
+    timestamp, signatures = _parse_signature_header(header)
+    if not timestamp or not signatures:
+        return False
+    try:
+        sent_at = int(timestamp)
+    except ValueError:
+        return False
+    if abs((now or timezone.now()).timestamp() - sent_at) > SIGNATURE_TOLERANCE:
+        return False
+    expected = _digest(signing_secret, timestamp.encode() + b'.' + raw_body)
+    return any(hmac.compare_digest(expected, sig) for sig in signatures)
+
+
 def signature_ok(raw_body: bytes, meta, now=None) -> bool:
     """Check a delivery's signature. `meta` is Django's request.META."""
     header = meta.get('HTTP_PAYSTACK_SIGNATURE', '')
@@ -100,20 +114,11 @@ def signature_ok(raw_body: bytes, meta, now=None) -> bool:
     signing_secret = getattr(settings, 'PAYSTACK_SIGNING_SECRET', '')
     secret_key = getattr(settings, 'PAYSTACK_SECRET_KEY', '')
 
-    if header and signing_secret:
-        timestamp, signatures = _parse_signature_header(header)
-        if not timestamp or not signatures:
-            return False
-        try:
-            sent_at = int(timestamp)
-        except ValueError:
-            return False
-        current = (now or timezone.now()).timestamp()
-        if abs(current - sent_at) > SIGNATURE_TOLERANCE:
-            return False
-        expected = _digest(signing_secret, timestamp.encode() + b'.' + raw_body)
-        return any(hmac.compare_digest(expected, sig) for sig in signatures)
+    if header and signing_secret and _current_signature_ok(header, signing_secret, raw_body, now):
+        return True
 
+    # Either signature proves the sender knows one of our secrets, so a delivery that
+    # fails the first check can still pass this one.
     if legacy and secret_key:
         return hmac.compare_digest(_digest(secret_key, raw_body), legacy.strip().lower())
     return False

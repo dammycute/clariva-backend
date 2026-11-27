@@ -90,5 +90,14 @@ class School(BaseUUIDModel):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    @property
+    def portal_url(self):
+        """Where this school's own portal lives, or '' when no domain is configured."""
+        from django.conf import settings
+        domain = (getattr(settings, 'PLATFORM_DOMAIN', '') or '').strip()
+        if not domain or not self.subdomain:
+            return ''
+        return f'https://{self.subdomain}.{domain}'
+
     def __str__(self):
         return self.name

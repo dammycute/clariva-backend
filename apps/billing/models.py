@@ -44,6 +44,12 @@ class TermCalendar(BaseUUIDModel):
     provisional = models.BooleanField(
         default=False, help_text='Set until the ministry confirms the date.',
     )
+    # Proof: the state's official notice, and who confirmed the date from it.
+    source_url = models.URLField(max_length=500, blank=True, default='')
+    confirmed_by = models.ForeignKey(
+        'accounts.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    confirmed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

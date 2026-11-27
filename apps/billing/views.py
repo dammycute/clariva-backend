@@ -1,8 +1,13 @@
+import hmac
 import json
 import logging
+import re
+import uuid
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 from django.conf import settings
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import generics, permissions, status, viewsets
@@ -15,14 +20,15 @@ from apps.locations.models import State
 from apps.permissions import ADMIN_ROLES
 from apps.schools.models import School
 from apps.schools.views import IsSuperAdmin
-from . import paystack
+from . import paystack, term_dates
 from .exceptions import PaymentProblem
 from .models import Payment, TermCalendar
 from .serializers import ManualPaymentSerializer, PaymentSerializer, TermCalendarSerializer
 from .services import (
     PAYMENT_WINDOW_DAYS, apply_manual_payment, billing_state, blocks_for, capacity,
-    create_payment, fulfil_payment, invalidate, price_for_blocks, quote_students,
-    school_billing, status_payload, term_to_pay, term_window,
+    create_payment, current_term_paid, fulfil_payment, invalidate, limit_for_blocks,
+    price_for_blocks, quote_students, school_billing, status_payload, term_to_pay,
+    term_window,
 )
 
 logger = logging.getLogger('apps')
@@ -39,6 +45,18 @@ def school_for(request):
     if school is None:
         raise PaymentProblem('No school is assigned to your account.', code='no_school')
     return school
+
+
+def safe_callback(url):
+    """Where Paystack may send the payer back. Only our own websites; anything else gets the default."""
+    default = getattr(settings, 'PAYSTACK_CALLBACK_URL', '')
+    if not url:
+        return default
+    parts = urlsplit(str(url))
+    origin = f'{parts.scheme}://{parts.netloc}'
+    ours = origin in getattr(settings, 'CORS_ALLOWED_ORIGINS', []) or any(
+        re.match(pattern, origin) for pattern in getattr(settings, 'CORS_ALLOWED_ORIGIN_REGEXES', []))
+    return str(url) if ours else default
 
 
 def is_admin(user):
@@ -97,11 +115,11 @@ class InitializePaymentView(APIView):
             blocks = blocks_for(students)
             if blocks <= school.paid_blocks:
                 raise PaymentProblem(
-                    f'Your plan already covers {school.paid_blocks * 50 + 10} students.',
+                    f'Your plan already covers {limit_for_blocks(school.paid_blocks)} students.',
                     code='no_upgrade_needed',
                 )
             amount = price_for_blocks(blocks - school.paid_blocks) * 100
-            academic_year, term = term_to_pay(school)
+            academic_year, term = current_term_paid(school)      # places for this term, not the next
             # An upgrade keeps the dates it already has.
             covers_from, access_until = today, school.access_until
         else:
@@ -136,7 +154,7 @@ class InitializePaymentView(APIView):
             access_until=access_until, created_by=request.user,
         )
 
-        callback = request.data.get('callback_url') or getattr(settings, 'PAYSTACK_CALLBACK_URL', '')
+        callback = safe_callback(request.data.get('callback_url'))
         email = request.user.email
         try:
             data = paystack.initialize(
@@ -254,21 +272,91 @@ class TermCalendarViewSet(viewsets.ModelViewSet):
             qs = qs.filter(school_id=school)
         return qs
 
+    def perform_create(self, serializer):
+        self._save(serializer)
+
+    def perform_update(self, serializer):
+        self._save(serializer)
+
+    def _save(self, serializer):
+        with transaction.atomic():
+            row, _ = self._apply(serializer)
+            term_dates.check_order([row], self.request.data.get('confirm_unusual') is True)
+
+    def _apply(self, serializer):
+        """Save one date: note who confirmed it, and lengthen payments made on an earlier estimate."""
+        before = serializer.instance
+        old_date = before.resumes_on if before else None
+        was_estimate = bool(before and before.provisional)
+        row = serializer.save()
+        changed = old_date != row.resumes_on or was_estimate != row.provisional
+        if not row.provisional and (changed or row.confirmed_at is None):
+            row.confirmed_by, row.confirmed_at = self.request.user, timezone.now()
+            row.save(update_fields=['confirmed_by', 'confirmed_at'])
+        extended = term_dates.extend_paid_on_estimate(row, old_date) if was_estimate else 0
+        return row, extended
+
+    @action(detail=False, methods=['post'])
+    def bulk(self, request):
+        """Enter a session's dates once and apply them to several states. All or nothing."""
+        states = request.data.get('states') or []
+        dates = [d for d in (request.data.get('dates') or []) if isinstance(d, dict) and d.get('resumes_on')]
+        if not isinstance(states, list) or not states or not dates:
+            raise PaymentProblem('Choose at least one state and enter at least one date.', code='nothing_to_save')
+        saved, extended = [], 0
+        with transaction.atomic():
+            for state in states:
+                for entry in dates:
+                    existing = TermCalendar.objects.filter(
+                        state_id=self._uuid(state), school__isnull=True,
+                        academic_year=entry.get('academic_year'), term=entry.get('term')).first()
+                    data = {key: entry.get(key) for key in ('academic_year', 'term', 'resumes_on')}
+                    data.update(state=state, school=None, provisional=entry.get('provisional') is True,
+                                source_url=entry.get('source_url') or (existing.source_url if existing else ''))
+                    serializer = self.get_serializer(existing, data=data, partial=existing is not None)
+                    serializer.is_valid(raise_exception=True)
+                    row, gained = self._apply(serializer)
+                    saved.append(row)
+                    extended += gained
+            # checked after everything is saved, so several dates can move together
+            term_dates.check_order(saved, request.data.get('confirm_unusual') is True)
+        return Response({'saved': len(saved), 'extended_schools': extended})
+
+    @staticmethod
+    def _uuid(value):
+        try:
+            return uuid.UUID(str(value))
+        except ValueError:
+            raise PaymentProblem('Unknown state.', code='bad_state')
+
     @action(detail=False, methods=['get'])
-    def missing(self, request):
-        """States with no resumption date in the next 90 days."""
-        today = timezone.localdate()
-        horizon = today + timedelta(days=90)
-        covered = set(
-            TermCalendar.objects.filter(
-                resumes_on__gte=today, resumes_on__lte=horizon,
-            ).values_list('state_id', flat=True)
-        )
-        rows = [
-            {'id': str(s.pk), 'name': s.name, 'code': s.code}
-            for s in State.objects.all() if s.pk not in covered
-        ]
-        return Response({'states': rows, 'horizon_days': 90})
+    def due(self, request):
+        """What the admins still have to enter, for states that have schools."""
+        states, unmatched = term_dates.states_needing_dates()
+        slots = lambda items: [{'academic_year': y, 'term': t} for y, t in items]
+        return Response({
+            'states': [{'id': str(s['state'].pk), 'name': s['state'].name, 'schools': s['schools'],
+                        'missing': slots(s['missing']), 'unconfirmed': slots(s['unconfirmed'])}
+                       for s in states],
+            'schools_without_state': unmatched,
+            'email_ready': bool(getattr(settings, 'RESEND_API_KEY', '')),
+        })
+
+    @action(detail=False, methods=['get', 'put'])
+    def recipients(self, request):
+        """Which platform admins are emailed about term dates. New admins are included."""
+        if request.method == 'PUT':
+            ids = {str(i) for i in (request.data.get('ids') or [])}
+            chosen = [a.pk for a in term_dates.admins() if str(a.pk) in ids]
+            if not chosen:
+                raise PaymentProblem('Choose at least one admin, or nobody would be told.', code='nobody')
+            for admin in term_dates.admins():
+                wanted = admin.pk in chosen
+                if admin.receives_calendar_reminders != wanted:
+                    admin.receives_calendar_reminders = wanted
+                    admin.save(update_fields=['receives_calendar_reminders'])
+        return Response([{'id': str(a.pk), 'name': a.get_full_name() or a.email, 'email': a.email,
+                          'selected': a.receives_calendar_reminders} for a in term_dates.admins()])
 
 
 class AdminPaymentListView(generics.ListAPIView):
@@ -310,6 +398,12 @@ class ManualPaymentView(APIView):
             access_until = data['access_until']
             covers_from = today
             blocks = school.paid_blocks
+            if not blocks:
+                # With no places on record the school would have no student limit at all.
+                students = data.get('students') or quote_students(school)
+                if not students:
+                    raise PaymentProblem('Say how many students this covers.', code='students_required')
+                blocks = blocks_for(students)
             amount = 0
             academic_year, term = school.current_academic_year, school.current_term
             kind = 'grant'
@@ -319,7 +413,7 @@ class ManualPaymentView(APIView):
             window = term_window(school.state, school, academic_year, term)
             if window is None:
                 raise PaymentProblem(
-                    'Set this state\'s term dates first, or pass access_until.',
+                    'The term dates for this state are missing. Enter them under Term calendars first.',
                     code='missing_calendar',
                 )
             students = data.get('students') or quote_students(school)
@@ -350,12 +444,13 @@ class BlocksOverrideView(APIView):
             blocks = int(request.data.get('blocks'))
         except (TypeError, ValueError):
             raise PaymentProblem('Pass a whole number of blocks.', code='bad_blocks')
-        if blocks < 0:
-            raise PaymentProblem('Blocks cannot be negative.', code='bad_blocks')
+        if blocks < 1:
+            # Zero would switch the student limit off.
+            raise PaymentProblem('A school needs at least one block.', code='bad_blocks')
         school.paid_blocks = blocks
         school.save(update_fields=['paid_blocks'])      # the audit signal logs this write
         invalidate(school.pk)
-        return Response({'blocks': blocks, 'limit': blocks * 50 + 10,
+        return Response({'blocks': blocks, 'limit': limit_for_blocks(blocks),
                          'capacity': capacity(School.objects.get(pk=school.pk))})
 
 
@@ -367,9 +462,11 @@ class RemindersCronView(APIView):
     throttle_classes = ()
 
     def get(self, request):
-        secret = getattr(settings, 'BILLING_CRON_SECRET', '')
-        sent_header = request.META.get('HTTP_AUTHORIZATION', '').replace('Bearer ', '')
-        if not secret or sent_header != secret:
+        # Vercel sends CRON_SECRET; other schedulers can use BILLING_CRON_SECRET.
+        secrets_ = [s for s in (getattr(settings, 'BILLING_CRON_SECRET', ''),
+                                getattr(settings, 'CRON_SECRET', '')) if s]
+        sent = request.META.get('HTTP_AUTHORIZATION', '').removeprefix('Bearer ').encode()
+        if not any(hmac.compare_digest(sent, s.encode()) for s in secrets_):
             return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
         from .reminders import run
         return Response({'sent': run()})

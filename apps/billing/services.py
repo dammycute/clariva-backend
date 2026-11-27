@@ -1,14 +1,18 @@
 """The billing rules, in one place.
 
-Price: ₦30,000 per term for each block of 50 students, with 10 free places on top of
-each block. A paid term covers the school until 21 days after the next term resumes.
+Price: ₦30,000 per term for each block of 50 students. The 10 free places belong to
+the school, not to each block: one block covers 60 students, two cover 110, six cover
+310. A paid term covers the school until 21 days after the next term resumes.
 
 Nothing here reads the request; the views and the authentication hook call in.
 """
+import logging
 import math
+import re
 from datetime import date, timedelta
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
@@ -21,12 +25,18 @@ from .models import Payment, TermCalendar
 
 PRICE_PER_BLOCK = 30000          # naira
 BLOCK_SIZE = 50
-BUFFER_STUDENTS = 10             # free places on top of every block
+BUFFER_STUDENTS = 10             # free places for the school, once — not per block
 GRACE_DAYS = 21                  # after the next term resumes
 PAYMENT_WINDOW_DAYS = 60         # how early a school may pay
 CACHE_TTL = 60                   # seconds; the entitlement check reads this
 
 TERM_ORDER = ['1st Term', '2nd Term', '3rd Term']
+
+logger = logging.getLogger('apps')
+
+# An attempt that is already running must be able to finish, whatever happens to the bill.
+EXAM_SAVE_OR_SUBMIT = re.compile(r'^/api/exams/sessions/[0-9a-fA-F-]+/(save|submit)/$')
+EXAM_START = re.compile(r'^/api/exams/exams/([0-9a-fA-F-]+)/start/$')
 
 # Paths that must keep working for a school that has not paid: signing in, the billing
 # pages themselves, the public parent portal, health checks, and the Django admin.
@@ -44,11 +54,12 @@ EXEMPT_PREFIXES = (
 def blocks_for(students: int) -> int:
     """How many blocks of 50 a school with this many students pays for.
 
-    1 to 60 students is one block; 61 starts the second. Zero is refused.
+    The buffer is subtracted once, whatever the size of the school: 60 students is
+    one block, 61 starts the second, 300 is six and 700 is fourteen. Zero is refused.
     """
     if students is None or students < 1:
         raise ValueError('A school needs at least one student.')
-    return max(1, math.ceil((students - BUFFER_STUDENTS) / BLOCK_SIZE))
+    return max(1, math.ceil(max(students - BUFFER_STUDENTS, 1) / BLOCK_SIZE))
 
 
 def limit_for_blocks(blocks: int) -> int:
@@ -127,7 +138,8 @@ def term_window(state_name: str, school, academic_year: str, term: str):
         'academic_year': academic_year,
         'term': term,
         'resumes_on': this.resumes_on,
-        'provisional': this.provisional,
+        # provisional if either date it is built from is still unconfirmed
+        'provisional': this.provisional or following.provisional,
         'next_academic_year': next_year,
         'next_term': next_name,
         'next_resumes_on': following.resumes_on,
@@ -135,11 +147,25 @@ def term_window(state_name: str, school, academic_year: str, term: str):
     }
 
 
+def term_payments(school):
+    """Paid records that bought a term. Upgrades add places, and a date-only grant adds
+    time; neither buys a term. Records held for review are left out too."""
+    return (Payment.objects.filter(school=school, status='paid')
+            .exclude(kind='upgrade').exclude(kind='grant', amount=0)
+            .exclude(note__startswith=REVIEW))
+
+
+def current_term_paid(school):
+    """The term the school's access belongs to: what an upgrade adds places to."""
+    last = term_payments(school).order_by('-access_until', '-paid_at').first()
+    if last is not None:
+        return last.academic_year, last.term
+    return school.current_academic_year, school.current_term
+
+
 def term_to_pay(school):
     """The term a payment now would buy: the one after the last paid term."""
-    last = Payment.objects.filter(school=school, status='paid').order_by(
-        '-access_until', '-paid_at',
-    ).first()
+    last = term_payments(school).order_by('-access_until', '-paid_at').first()
     if last is not None:
         return next_term(last.academic_year, last.term)
     return school.current_academic_year, school.current_term
@@ -177,6 +203,20 @@ def invalidate(school_id):
     cache.delete(f'billing:school:{school_id}')
 
 
+def _finishing_an_exam(user, path) -> bool:
+    """Saving, handing in, or reopening an attempt that is already running."""
+    if EXAM_SAVE_OR_SUBMIT.match(path):
+        return True                       # the views check the attempt is the student's own and open
+    start = EXAM_START.match(path)
+    if not start:
+        return False
+    from apps.exams.models import ExamSession
+    try:
+        return ExamSession.objects.filter(exam_id=start.group(1), student=user, status='active').exists()
+    except (ValueError, ValidationError):
+        return False
+
+
 def enforce(user, request):
     """Called from authentication on every request. Raises 402 when the school may not go on."""
     if not getattr(settings, 'BILLING_ENFORCE', False):
@@ -203,7 +243,7 @@ def enforce(user, request):
             'billing_pending',
             'Your school has not paid for this term yet. Pay to open the portal.',
         )
-    if state == 'lapsed' and request.method not in SAFE_METHODS:
+    if state == 'lapsed' and request.method not in SAFE_METHODS and not _finishing_an_exam(user, path):
         raise BillingBlocked(
             'billing_lapsed',
             'Your school\'s subscription has lapsed. Admins can read and pay; '
@@ -225,6 +265,9 @@ def check_capacity(school, adding: int = 1):
     """Raise 409 if `adding` more students would pass what the plan covers."""
     if not getattr(settings, 'BILLING_ENFORCE', False):
         return
+    if transaction.get_connection().in_atomic_block:
+        # Callers create the student inside the same transaction, so a second request waits here.
+        school = School.objects.select_for_update().get(pk=school.pk)
     if not school.paid_blocks:
         return                                  # nothing bought: the 402 gate owns this school
     room = capacity(school)
@@ -256,6 +299,25 @@ def create_payment(school, kind, students, academic_year, term, amount, blocks_a
     )
 
 
+REVIEW = 'REVIEW:'
+
+
+def _needs_review(payment, school):
+    """Why a confirmed payment must not change the school, or '' when it can be applied.
+
+    The money has arrived either way. Applying it would take something away or charge
+    twice, so it is kept, marked for a person to refund or credit.
+    """
+    if payment.kind != 'upgrade' and term_payments(school).exclude(pk=payment.pk).filter(
+            academic_year=payment.academic_year, term=payment.term).exists():
+        return f'{payment.term} {payment.academic_year} was already paid. Refund or credit this payment.'
+    if school.access_until and payment.access_until < school.access_until:
+        return 'It was started before a newer payment and covers less time. Refund or credit it.'
+    if payment.kind == 'upgrade' and payment.blocks_after <= school.paid_blocks:
+        return 'The school already has these places. Refund or credit this payment.'
+    return ''
+
+
 def fulfil_payment(payment, payload):
     """Write a verified Paystack payload onto the payment and the school.
 
@@ -285,23 +347,31 @@ def fulfil_payment(payment, payload):
         raise PaymentProblem('Paystack confirmed a different reference.', code='reference_mismatch')
 
     with transaction.atomic():
+        # The school row first: two payments for one school are then settled one at a time.
+        school = School.objects.select_for_update().get(pk=payment.school_id)
         locked = Payment.objects.select_for_update().get(pk=payment.pk)
         if locked.status == 'paid':
             return locked
+        problem = _needs_review(locked, school)
         locked.status = 'paid'
         locked.channel = (data.get('channel') or '')[:30]
         paid_at = data.get('paid_at')
         locked.paid_at = parse_datetime(paid_at) if paid_at else timezone.now()
-        locked.save(update_fields=['status', 'channel', 'paid_at'])
+        if problem:
+            locked.note = f'{REVIEW} {problem}'
+        locked.save(update_fields=['status', 'channel', 'paid_at', 'note'])
 
-        School.objects.filter(pk=locked.school_id).update(
-            paid_blocks=locked.blocks_after,
-            access_until=locked.access_until,
-            plan='basic',
-            trial_ends_at=None,
-        )
-        # Never un-suspend a school as a side effect of a payment.
-        School.objects.filter(pk=locked.school_id, status='pending').update(status='active')
+        if problem:
+            logger.warning('Payment %s needs review: %s', locked.reference, problem)
+        else:
+            School.objects.filter(pk=locked.school_id).update(
+                paid_blocks=locked.blocks_after,
+                access_until=locked.access_until,
+                plan='basic',
+                trial_ends_at=None,
+            )
+            # Never un-suspend a school as a side effect of a payment.
+            School.objects.filter(pk=locked.school_id, status='pending').update(status='active')
 
     invalidate(locked.school_id)
     try:
@@ -369,6 +439,7 @@ def status_payload(school, today=None):
         'payment_opens_on': None,
         'can_pay': False,
         'blocked_reason': None,
+        'dates_provisional': False,
     }
 
     if state == 'suspended':
@@ -389,9 +460,10 @@ def status_payload(school, today=None):
     year, term = term_to_pay(school)
     window = term_window(school.state, school, year, term)
     if window is None:
-        payload['blocked_reason'] = 'missing_calendar'
+        payload['blocked_reason'] = 'missing_calendar'      # billing never guesses a term's length
         return payload
 
+    payload['dates_provisional'] = window['provisional']
     payload['next_term'] = {
         'academic_year': window['academic_year'],
         'term': window['term'],
