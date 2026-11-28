@@ -34,7 +34,7 @@ def _host_only(request):
 def base_domain(host=''):
     """The domain the product runs on: from settings, or worked out from the host.
 
-    A deployment at app.clariva.ng answers with clariva.ng, so the subdomain it builds
+    A deployment at app.clarriva.com answers with clarriva.com, so the subdomain it builds
     is the one that will actually resolve.
     """
     host = (host or '').split(':')[0].lower()
@@ -53,7 +53,7 @@ def base_domain(host=''):
 
 
 def subdomain_from_host(host, base):
-    """'queens.clariva.ng' with base 'clariva.ng' gives 'queens'; the bare domain gives ''."""
+    """'queens.clarriva.com' with base 'clarriva.com' gives 'queens'; the bare domain gives ''."""
     host = (host or '').split(':')[0].lower()
     base = (base or '').lower()
     if not host or not base or host == base:
@@ -322,6 +322,7 @@ class SchoolViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Invalid data format'}, status=status.HTTP_400_BAD_REQUEST)
 
         restored_count = 0
+        fees_skipped = 0
         errors = []
 
         for item in items:
@@ -332,6 +333,12 @@ class SchoolViewSet(viewsets.ModelViewSet):
             model_label = item['model']
             if model_label not in RESTORE_FIELDS:
                 errors.append(f'Model "{model_label}" is not allowed for restore')
+                continue
+
+            # Only the bursar makes fee records, so a school admin's file cannot bring them in.
+            # Skipping is not an error: the rest of the backup still restores.
+            if model_label.startswith('fees.') and request.user.role != 'super_admin':
+                fees_skipped += 1
                 continue
 
             fields = item['fields']
@@ -359,9 +366,14 @@ class SchoolViewSet(viewsets.ModelViewSet):
             except Exception as e:
                 errors.append(f'{model_label}: {str(e)}')
 
+        if fees_skipped and not restored_count and not errors:
+            return Response({'error': 'Nothing was restored. Fee records cannot be restored by a school admin.',
+                             'fee_records_skipped': fees_skipped}, status=status.HTTP_403_FORBIDDEN)
+
         return Response({
             'restored': restored_count > 0,
             'items_processed': restored_count,
+            'fee_records_skipped': fees_skipped,
             'errors': errors,
         }, status=status.HTTP_200_OK if restored_count > 0 and not errors else status.HTTP_400_BAD_REQUEST)
 

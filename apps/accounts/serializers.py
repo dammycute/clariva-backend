@@ -2,6 +2,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from apps.guardian.services import generated_parent
 from .models import User
 from .sessions import start_session
 
@@ -18,7 +19,13 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         school = ''
         if isinstance(getattr(self, 'initial_data', None), dict):
             school = str(self.initial_data.get('school') or '').strip().lower()
-        attrs['username'] = attrs.pop('email')
+        login = attrs.pop('email').strip()
+        if '@' not in login:
+            # a parent signs in with their child's admission number
+            parent = generated_parent(student__student_profile__admission_no__in=[login, login.upper()])
+            if parent:
+                login = parent.username
+        attrs['username'] = login
         data = super().validate(attrs)
         user = self.user
         if school and user.role != 'super_admin':
@@ -181,7 +188,7 @@ class SelfUpdateSerializer(serializers.ModelSerializer):
     """Fields a user may change on their own account."""
     class Meta:
         model = User
-        fields = ('first_name', 'last_name', 'phone', 'avatar_url', 'photo_url')
+        fields = ('first_name', 'last_name', 'phone', 'avatar_url', 'photo_url', 'walkthrough_done')
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -198,13 +205,14 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             'id', 'username', 'email', 'first_name', 'last_name', 'phone', 'role',
-            'is_active', 'must_change_password', 'school', 'school_id', 'avatar_url', 'photo_url',
+            'is_active', 'must_change_password', 'walkthrough_done', 'school', 'school_id', 'avatar_url', 'photo_url',
             'date_of_birth', 'gender', 'lga_of_origin', 'state_of_origin',
             'admission_no', 'class_group', 'class_name', 'guardian_name',
             'guardian_phone', 'guardian_email', 'student_status', 'academic_year',
         )
         read_only_fields = (
-            'id', 'username', 'email', 'role', 'is_active', 'must_change_password', 'school', 'school_id',
+            'id', 'username', 'email', 'role', 'is_active', 'must_change_password', 'walkthrough_done',
+            'school', 'school_id',
         )
 
     def get_class_name(self, obj):

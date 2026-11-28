@@ -12,7 +12,7 @@ from .models import DemoRequest
 URL = '/api/leads/demo/'
 GOOD = {'name': 'Ngozi Bello', 'school_name': 'Queens College', 'role': 'principal',
         'phone': '0803 123 4567', 'email': 'ngozi@example.com', 'students': 240, 'message': 'We want to see CBT.'}
-MAIL = dict(RESEND_API_KEY='re_test', DEMO_NOTIFY_EMAIL='owner@example.com', DEMO_FROM_EMAIL='Clariva <onboarding@resend.dev>')
+MAIL = dict(RESEND_API_KEY='re_test', DEMO_NOTIFY_EMAIL='owner@example.com', DEMO_FROM_EMAIL='Clarriva <onboarding@resend.dev>')
 
 
 class DemoRequestTest(TestCase):
@@ -54,7 +54,7 @@ class DemoRequestTest(TestCase):
         body = json.loads(req.data)
         self.assertEqual(req.full_url, 'https://api.resend.com/emails')
         self.assertEqual(req.get_header('Authorization'), 'Bearer re_test')
-        self.assertEqual(req.get_header('User-agent'), 'clariva-backend')
+        self.assertEqual(req.get_header('User-agent'), 'clarriva-backend')
         self.assertEqual(body['to'], ['owner@example.com'])
         self.assertEqual(body['reply_to'], 'ngozi@example.com')
         self.assertIn('Queens College', body['subject'])

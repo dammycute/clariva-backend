@@ -15,7 +15,7 @@ Allow port 5432 only from the service's security group.
 ## 2. Secrets
 Put these in **AWS Secrets Manager** and give them to the service as environment variables.
 
-Make a new `SECRET_KEY` and `FERNET_KEYS` for production:
+Make a new `SECRET_KEY`, `FERNET_KEYS` and `LOOKUP_HASH_KEY` for production. Run this once for each:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(50))"
@@ -29,7 +29,7 @@ If you ever copy data from another database, you must use that database's key.
 | Name | Production value |
 |---|---|
 | `DEBUG` | `False` |
-| `SECRET_KEY`, `FERNET_KEYS` | the new secrets |
+| `SECRET_KEY`, `FERNET_KEYS`, `LOOKUP_HASH_KEY` | the new secrets, each one different |
 | `DATABASE_URL` | `postgres://USER:PASSWORD@HOST:5432/DBNAME` (the port is required; URL-encode symbols in the password) |
 | `DB_SSLMODE` | `require` |
 | `CACHE_BACKEND` | `db` |

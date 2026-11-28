@@ -35,5 +35,5 @@ def notify(lead) -> bool:
         f'Students: {lead.students if lead.students else "not given"}',
         '', lead.message or '(no message)',
     ]
-    subject = f'Clariva demo request: {lead.school_name}'.replace('\n', ' ')[:200]
+    subject = f'Clarriva demo request: {lead.school_name}'.replace('\n', ' ')[:200]
     return send_email(to, subject, '\n'.join(lines), reply_to=lead.email)

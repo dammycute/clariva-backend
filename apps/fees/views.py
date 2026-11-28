@@ -6,19 +6,16 @@ from apps.mixins import SchoolFilterMixin
 from .models import FeeItem, FeeInvoice
 from .serializers import FeeItemSerializer, FeeInvoiceSerializer
 from .services import FeeService
-
-
-FINANCE_ROLES = {'school_admin', 'admin_officer', 'bursary', 'super_admin'}
+from .roles import FEE_VIEW_ROLES, FEE_WRITE_ROLES
 
 
 class FeeRolePermission(permissions.IsAuthenticated):
-    """Allow read to all authenticated; write restricted to finance roles."""
+    """Only the bursar changes fees, invoices and payments. School leaders may look."""
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
-        if request.method in ('GET', 'HEAD', 'OPTIONS'):
-            return True
-        return getattr(request.user, 'role', None) in FINANCE_ROLES
+        allowed = FEE_VIEW_ROLES if request.method in permissions.SAFE_METHODS else FEE_WRITE_ROLES
+        return getattr(request.user, 'role', None) in allowed
 
 
 class FeeItemViewSet(SchoolFilterMixin, viewsets.ModelViewSet):

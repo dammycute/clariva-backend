@@ -1,11 +1,12 @@
 """Student accounts: generated logins, the detail page's data, and adding a student."""
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User
 from apps.classes.models import Class
 from apps.schools.models import School
 from apps.students.models import StudentProfile
+from apps.students.serializers import school_code
 
 
 class StudentAccountsTest(TestCase):
@@ -103,7 +104,8 @@ class StudentAccountsTest(TestCase):
         self.assertEqual(len(body['errors']), 1)
         numbers = [s['admission_no'] for s in body['students']]
         self.assertEqual(len(set(numbers)), 2)
-        self.assertTrue(all(n.startswith('CLR/') for n in numbers))
+        code = school_code(self.school)
+        self.assertTrue(all(n.startswith(f'{code}/') for n in numbers))
         self.assertFalse(StudentProfile.objects.filter(admission_no='SHOULD-BE-IGNORED').exists())
         self.assertEqual(StudentProfile.objects.filter(class_group=self.cls).count(), 3)   # Ada + 2 imported
 
@@ -156,3 +158,10 @@ class TeacherRosterTest(TestCase):
         self.assertEqual(res.status_code, 403, res.content)
         self.assertEqual(StudentProfile.objects.count(), 0)
 
+
+class SchoolCodeTests(SimpleTestCase):
+    def test_admission_numbers_start_with_a_short_school_code(self):
+        for name, code in (('Queens College', 'QC'), ('Government Secondary School', 'GSS'),
+                           ("St. Mary's College of Education", 'SMCE'), ('Greenfield', 'GRE'),
+                           ('The Light of Hope and Joy International Model Academy', 'LHJIM'), ('', 'SCH')):
+            self.assertEqual(school_code(School(name=name)), code, name)

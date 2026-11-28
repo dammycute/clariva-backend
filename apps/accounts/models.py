@@ -42,6 +42,9 @@ class User(AbstractUser):
     session_started_at = models.DateTimeField(null=True, blank=True, editable=False)
     # Platform admins: whether to email them about missing term dates. On for every new admin.
     receives_calendar_reminders = models.BooleanField(default=True)
+    # The first sign-in guide, finished or skipped. Nullable so code deployed before this column
+    # existed can still create users while a release is in progress.
+    walkthrough_done = models.BooleanField(null=True, blank=True, default=False)
 
     def __str__(self):
         name = self.get_full_name() or self.username or self.email or 'Unnamed'
@@ -53,14 +56,14 @@ class User(AbstractUser):
 
 class StudentAccessCode(BaseUUIDModel):
     student = models.OneToOneField(User, on_delete=models.CASCADE, related_name='access_code_link')
-    code = models.CharField(max_length=12, unique=True)
-    code_hash = models.CharField(max_length=64, unique=True, db_index=True, null=True, blank=True)
+    # Encrypted, so it cannot be searched or unique: code_hash does both.
+    code = EncryptedCharField(max_length=12)
+    code_hash = models.CharField(max_length=64, unique=True, db_index=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
-        if self.code and not self.code_hash:
-            self.code_hash = hash_value(self.code)
+        self.code_hash = hash_value(self.code)
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f'{self.code} — {self.student.get_full_name()}'
+        return f'Access code — {self.student.get_full_name()}'

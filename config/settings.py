@@ -15,6 +15,16 @@ if not SECRET_KEY:
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured('SECRET_KEY environment variable is required in production')
 
+# Keys the fingerprints used to find access codes. Kept apart from SECRET_KEY so that
+# changing SECRET_KEY never stops codes from being found.
+LOOKUP_HASH_KEY = config('LOOKUP_HASH_KEY', default='')
+if not LOOKUP_HASH_KEY:
+    if DEBUG or sys.argv[1:2] == ['test']:
+        LOOKUP_HASH_KEY = 'dev-only-lookup-key-not-for-production'
+    else:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured('LOOKUP_HASH_KEY environment variable is required in production')
+
 FERNET_KEYS = config('FERNET_KEYS', default=None)
 if FERNET_KEYS:
     FERNET_KEYS = [k.strip() for k in FERNET_KEYS.split(',') if k.strip()]
@@ -170,7 +180,7 @@ X_FRAME_OPTIONS = 'DENY'
 # comma-separated list; when it is empty the platform admins are emailed instead.
 RESEND_API_KEY = config('RESEND_API_KEY', default='')
 DEMO_NOTIFY_EMAIL = config('DEMO_NOTIFY_EMAIL', default='')
-DEMO_FROM_EMAIL = config('DEMO_FROM_EMAIL', default='Clariva <onboarding@resend.dev>')
+DEMO_FROM_EMAIL = config('DEMO_FROM_EMAIL', default='Clarriva <onboarding@resend.dev>')
 
 # Billing (apps.billing). Ship dark: BILLING_ENFORCE stays false until every existing
 # school has been covered, then it is switched on per environment.

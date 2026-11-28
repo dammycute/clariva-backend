@@ -4,15 +4,13 @@ from rest_framework.response import Response
 from django.db.models import Sum, Q
 from .models import FeeInvoice, FeeItem
 from apps.accounts.models import User
-
-
-FINANCE_ROLES = {'school_admin', 'bursary', 'super_admin'}
+from .roles import FEE_VIEW_ROLES
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def bursary_summary(request):
-    if getattr(request.user, 'role', None) not in FINANCE_ROLES:
+    if getattr(request.user, 'role', None) not in FEE_VIEW_ROLES:
         return Response({'error': 'Access denied'}, status=403)
 
     school_id = request.user.school_id

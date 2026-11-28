@@ -3,11 +3,13 @@ from rest_framework.decorators import action, api_view, permission_classes, thro
 from rest_framework.response import Response
 from rest_framework.throttling import BaseThrottle, ScopedRateThrottle
 from django.core.cache import cache
-from django.conf import settings
 
 from apps.accounts.models import User, StudentAccessCode
 from apps.base.encryption import hash_value, verify_hash
 from .models import GuardianStudent
+
+
+INVALID_LOOKUP = 'The admission number or access code is not correct.'
 
 
 def _rate_limit_ip(key_prefix, max_requests=10, window=60):
@@ -25,21 +27,6 @@ def _rate_limit_ip(key_prefix, max_requests=10, window=60):
             return view_fn(request, *args, **kwargs)
         return wrapper
     return decorator
-
-
-def _generate_otp(phone):
-    import secrets
-    otp = ''.join(secrets.choice('0123456789') for _ in range(6))
-    cache.set(f'portal_otp:{phone}', otp, 300)  # 5 min expiry
-    return otp
-
-
-def _verify_otp(phone, otp):
-    stored = cache.get(f'portal_otp:{phone}')
-    if not stored or stored != otp:
-        return False
-    cache.delete(f'portal_otp:{phone}')
-    return True
 
 
 @api_view(['POST'])
@@ -82,25 +69,24 @@ def portal_lookup(request):
         if not code:
             return Response({'error': 'Access code is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        admission_hash = hash_value(admission_no)
         try:
             student = User.objects.select_related(
                 'school', 'student_profile__class_group'
             ).get(
-                student_profile__admission_no_hash=admission_hash,
+                student_profile__admission_no__in=[admission_no, admission_no.upper()],
                 role='student',
                 school_id=school_id
             )
         except User.DoesNotExist:
-            return Response({'error': 'Student not found with this admission number'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': INVALID_LOOKUP}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             sac = StudentAccessCode.objects.get(student=student)
         except StudentAccessCode.DoesNotExist:
-            return Response({'error': 'No access code set for this student'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': INVALID_LOOKUP}, status=status.HTTP_404_NOT_FOUND)
 
-        if not verify_hash(code, sac.code):
-            return Response({'error': 'Invalid access code'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not verify_hash(code, sac.code_hash):
+            return Response({'error': INVALID_LOOKUP}, status=status.HTTP_404_NOT_FOUND)
 
     from apps.fees.models import FeeInvoice, FeeInvoiceItem
     invoices = FeeInvoice.objects.filter(student=student)
@@ -210,135 +196,6 @@ def portal_lookup(request):
             'total': total_att,
         },
     })
-
-
-@api_view(['POST'])
-@permission_classes([permissions.AllowAny])
-@throttle_classes([ScopedRateThrottle])
-@throttle_scope('otp')
-@_rate_limit_ip('portal_setup_init')
-def portal_setup_initiate(request):
-    phone = request.data.get('phone', '').strip()
-    student_code = request.data.get('student_code', '').strip().upper()
-    subdomain = request.data.get('subdomain', '').strip()
-
-    if not phone or not student_code:
-        return Response(
-            {'error': 'phone and student_code are required'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    # Rate limit per phone: 5 attempts per 15 minutes
-    phone_key = f'portal_setup_attempts:{phone}'
-    attempts = cache.get(phone_key, 0)
-    if attempts >= 5:
-        return Response(
-            {'error': 'Too many attempts. Try again in 15 minutes.'},
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-
-    # Validate student_code belongs to a real student
-    sac_qs = StudentAccessCode.objects.select_related('student', 'student__school')
-    if subdomain:
-        sac_qs = sac_qs.filter(student__school__subdomain__iexact=subdomain)
-
-    student_code_hash = hash_value(student_code)
-    try:
-        sac = sac_qs.get(code_hash=student_code_hash)
-    except StudentAccessCode.DoesNotExist:
-        return Response({'error': 'Invalid student code'}, status=status.HTTP_404_NOT_FOUND)
-
-    otp = _generate_otp(phone)
-    cache.set(phone_key, attempts + 1, 900)  # 15 min window
-
-    # In production, send OTP via Termii/SMS here
-    # For dev, return OTP in response for testing
-    response_data = {'message': 'OTP sent to your phone number'}
-    if settings.DEBUG:
-        response_data['otp'] = otp  # Remove in production
-    return Response(response_data)
-
-
-@api_view(['POST'])
-@permission_classes([permissions.AllowAny])
-@throttle_classes([ScopedRateThrottle])
-@throttle_scope('otp')
-@_rate_limit_ip('portal_setup_verify')
-def portal_setup_verify(request):
-    phone = request.data.get('phone', '').strip()
-    password = request.data.get('password', '')
-    student_code = request.data.get('student_code', '').strip().upper()
-    otp = request.data.get('otp', '').strip()
-    subdomain = request.data.get('subdomain', '').strip()
-
-    if not phone or not password or not student_code or not otp:
-        return Response(
-            {'error': 'phone, password, student_code, and otp are required'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if len(password) < 6:
-        return Response(
-            {'error': 'Password must be at least 6 characters'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    if not _verify_otp(phone, otp):
-        return Response(
-            {'error': 'Invalid or expired OTP'},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    sac_qs = StudentAccessCode.objects.select_related('student', 'student__school')
-    if subdomain:
-        sac_qs = sac_qs.filter(student__school__subdomain__iexact=subdomain)
-
-    student_code_hash = hash_value(student_code)
-    try:
-        sac = sac_qs.get(code_hash=student_code_hash)
-    except StudentAccessCode.DoesNotExist:
-        return Response({'error': 'Invalid student code'}, status=status.HTTP_404_NOT_FOUND)
-
-    student = sac.student
-    school = student.school
-
-    parent_username = f'parent.{phone}'
-    parent, created = User.objects.get_or_create(
-        username=parent_username,
-        defaults={
-            'school': school,
-            'phone': phone,
-            'role': 'parent',
-            'email': f'{parent_username}@parent.clariva.ng',
-        },
-    )
-
-    if not created:
-        # Existing account — verify phone ownership before allowing password reset
-        if parent.phone != phone:
-            return Response(
-                {'error': 'Phone number does not match existing account'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-    parent.set_password(password)
-    parent.save()
-
-    GuardianStudent.objects.get_or_create(guardian=parent, student=student)
-
-    # Clear rate limit on success
-    cache.delete(f'portal_setup_attempts:{phone}')
-
-    return Response({'message': 'Account set up successfully. You can now log in.'}, status=status.HTTP_201_CREATED)
-
-
-@api_view(['POST'])
-@permission_classes([permissions.AllowAny])
-def portal_setup(request):
-    return Response(
-        {'error': 'Use POST /api/portal/setup/initiate/ then POST /api/portal/setup/verify/ with OTP'},
-        status=status.HTTP_400_BAD_REQUEST,
-    )
 
 
 @api_view(['GET'])
