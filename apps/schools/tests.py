@@ -235,6 +235,35 @@ class RestoreAuthorizationTests(TestCase):
         resp = self.client.post('/api/schools/restore/', payload, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def restore(self, user, *items):
+        self.client.force_authenticate(user)
+        return self.client.post('/api/schools/restore/', {'confirm': True, 'data': list(items)}, format='json')
+
+    FEE = {'model': 'fees.FeeItem', 'fields': {'name': 'Tuition', 'amount': '5000'}}
+
+    def test_school_admin_restores_everything_but_fee_records(self):
+        from apps.classes.models import Class
+        from apps.fees.models import FeeItem
+        resp = self.restore(self.admin, self.FEE, {'model': 'classes.Class', 'fields': {'name': 'JSS1A'}})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
+        self.assertEqual((resp.json()['items_processed'], resp.json()['fee_records_skipped']), (1, 1))
+        self.assertTrue(Class.objects.filter(school=self.school, name='JSS1A').exists())
+        self.assertFalse(FeeItem.objects.exists())
+
+    def test_school_admin_cannot_restore_any_fee_record(self):
+        from apps.fees.models import FeeItem, FeeInvoice
+        resp = self.restore(self.admin, self.FEE,
+                            {'model': 'fees.FeeInvoice', 'fields': {'amount_due': '1'}},
+                            {'model': 'fees.FeeInvoiceItem', 'fields': {'amount_due': '1'}})
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN, resp.content)
+        self.assertEqual(resp.json()['fee_records_skipped'], 3)
+        self.assertFalse(FeeItem.objects.exists() or FeeInvoice.objects.exists())
+
+    def test_platform_admin_can_still_restore_fees(self):
+        from apps.fees.models import FeeItem
+        self.restore(self.super, self.FEE)
+        self.assertEqual(FeeItem.objects.get().school, self.school)
+
     def test_super_admin_no_school_needs_payload_school_id(self):
         super_no_school = _make_user('super_admin', school=None)
         self.client.force_authenticate(super_no_school)

@@ -141,8 +141,8 @@ def _digest_text(states, unmatched):
 
 def _send(states, unmatched):
     needing = len([s for s in states if s['missing']])
-    subject = (f'Clariva: term dates missing for {needing} state(s)' if needing
-               else 'Clariva: term dates need attention')
+    subject = (f'Clarriva: term dates missing for {needing} state(s)' if needing
+               else 'Clarriva: term dates need attention')
     to = recipients()
     return bool(to) and send_email(to, subject, _digest_text(states, unmatched))
 

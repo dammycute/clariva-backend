@@ -20,8 +20,12 @@ class FeeBase(TestCase):
         self.jss2a = Class.objects.create(school=self.school, name='JSS2A', year_group='JSS2', arm='A')
         self.admin = User.objects.create_user(username='adm', email='a@t.com', password='pass1234',
                                               school=self.school, role='school_admin')
+        self.bursar = User.objects.create_user(username='bur', email='b@t.com', password='pass1234',
+                                               school=self.school, role='bursary')
         self.api = APIClient()
-        self.api.force_authenticate(user=self.admin)
+        self.api.force_authenticate(user=self.bursar)
+        self.admin_api = APIClient()                     # students and notices stay with the admin
+        self.admin_api.force_authenticate(user=self.admin)
         self.s1 = self._student('s1', 'ADM1', self.jss1a)
         self.s2 = self._student('s2', 'ADM2', self.jss1b)
         self.s3 = self._student('s3', 'ADM3', self.jss2a)
@@ -39,6 +43,37 @@ class FeeBase(TestCase):
         self.assertEqual(res.status_code, 201, res.content)
         return res.json()
 
+
+
+class FeeRoleTest(FeeBase):
+    def as_role(self, role):
+        user = User.objects.create(username=f'x-{role}', school=self.school, role=role)
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def test_school_leaders_see_fees_but_cannot_change_them(self):
+        item = self._fee()
+        invoice = FeeInvoice.objects.get(student=self.s1)
+        for role in ('school_admin', 'admin_officer', 'principal'):
+            client = self.as_role(role)
+            for path in ('/api/fees/items/', '/api/fees/invoices/', '/api/fees/bursary-summary/'):
+                self.assertEqual(client.get(path).status_code, 200, (role, path))
+            attempts = [
+                client.post('/api/fees/items/', {'name': 'New', 'amount': '1'}, format='json'),
+                client.patch(f"/api/fees/items/{item['id']}/", {'amount': '1'}, format='json'),
+                client.delete(f"/api/fees/items/{item['id']}/?with_invoices=true"),
+                client.post('/api/fees/invoices/', {'student': str(self.s3.id), 'amount_due': '1'}, format='json'),
+                client.patch(f'/api/fees/invoices/{invoice.id}/', {'amount_paid': '1'}, format='json'),
+                client.delete(f'/api/fees/invoices/{invoice.id}/'),
+            ]
+            self.assertEqual([r.status_code for r in attempts], [403] * len(attempts), role)
+
+    def test_teachers_and_students_cannot_read_school_fees(self):
+        self._fee()
+        for client in (self.as_role('teacher'), self.as_role('student')):
+            for path in ('/api/fees/items/', '/api/fees/invoices/', '/api/fees/bursary-summary/'):
+                self.assertEqual(client.get(path).status_code, 403, path)
 
 
 class AutoInvoiceTest(FeeBase):
@@ -73,7 +108,7 @@ class AutoInvoiceTest(FeeBase):
         self.assertEqual(rows[0]['class_group'], str(self.jss1a.id))
 
     def test_creating_an_announcement_works(self):
-        res = self.api.post('/api/comms/', {'title': 'Hi', 'body': 'School resumes'}, format='json')
+        res = self.admin_api.post('/api/comms/', {'title': 'Hi', 'body': 'School resumes'}, format='json')
         self.assertEqual(res.status_code, 201, res.content)
         from apps.comms.models import Announcement
         ann = Announcement.objects.get(title='Hi')
@@ -120,14 +155,14 @@ class AutoInvoiceTest(FeeBase):
 
     def test_a_student_added_later_is_billed_straight_away(self):
         self._fee()
-        res = self.api.post('/api/students/', {'first_name': 'New', 'last_name': 'Kid',
+        res = self.admin_api.post('/api/students/', {'first_name': 'New', 'last_name': 'Kid',
                                                'class_group': str(self.jss1a.id)}, format='json')
         self.assertEqual(res.status_code, 201, res.content)
         self.assertEqual(FeeInvoice.objects.filter(student_id=res.json()['id']).count(), 1)
 
     def test_imported_students_are_billed(self):
         self._fee()
-        res = self.api.post('/api/students/import_csv/', {'csv': 'full_name,class\nAda Obi,JSS1A\nBayo Ade,JSS2A\n'},
+        res = self.admin_api.post('/api/students/import_csv/', {'csv': 'full_name,class\nAda Obi,JSS1A\nBayo Ade,JSS2A\n'},
                             format='json')
         self.assertEqual(res.json()['created'], 2, res.content)
         self.assertEqual(FeeInvoice.objects.filter(student__first_name='Ada').count(), 1)
@@ -135,7 +170,7 @@ class AutoInvoiceTest(FeeBase):
 
     def test_promoting_a_student_into_a_billed_class_bills_them(self):
         self._fee()
-        res = self.api.post('/api/students/promote/', {'student_ids': [str(self.s3.id)],
+        res = self.admin_api.post('/api/students/promote/', {'student_ids': [str(self.s3.id)],
                                                        'target_class_id': str(self.jss1a.id)}, format='json')
         self.assertEqual(res.status_code, 200, res.content)
         self.assertTrue(FeeInvoice.objects.filter(student=self.s3).exists())

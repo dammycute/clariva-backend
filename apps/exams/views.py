@@ -715,7 +715,7 @@ class ExamViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def question_template(self, request):
         paragraphs = [
-            ('Clariva CBT Exam Template', True),
+            ('Clarriva CBT Exam Template', True),
             ('', False),
             ('EXAM: Mid-Term Examination', False),
             ('SUBJECT: Mathematics', False),

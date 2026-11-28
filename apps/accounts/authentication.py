@@ -1,5 +1,5 @@
 from rest_framework import status
-from rest_framework.exceptions import APIException, AuthenticationFailed
+from rest_framework.exceptions import APIException, AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
@@ -10,6 +10,11 @@ from .sessions import is_current
 
 # What a user with a generated password may still do: see who they are, change it, leave.
 PASSWORD_CHANGE_PATHS = ('/api/auth/me/', '/api/auth/change-password/', '/api/auth/logout/')
+
+
+# All a parent account may reach: itself and its own linked children. Many school endpoints
+# only ask for a signed-in user, so parents are held to this list in one place.
+PARENT_PATHS = ('/api/auth/', '/api/portal/', '/api/schools/by-domain/')
 
 
 class PasswordChangeRequired(APIException):
@@ -37,6 +42,8 @@ class SessionJWTAuthentication(JWTAuthentication):
         if result is not None:
             if result[0].must_change_password and request.path not in PASSWORD_CHANGE_PATHS:
                 raise PasswordChangeRequired()
+            if result[0].role == 'parent' and not request.path.startswith(PARENT_PATHS):
+                raise PermissionDenied('Parent accounts cannot open this.')
             from apps.billing.services import enforce     # local: keeps app loading clean
             enforce(result[0], request)
         return result

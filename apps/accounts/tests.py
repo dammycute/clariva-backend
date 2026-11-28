@@ -35,7 +35,7 @@ class PrivilegeEscalationTests(TestCase):
 
 
 MAIL = dict(RESEND_API_KEY='re_test',
-            DEMO_FROM_EMAIL='Clariva <onboarding@resend.dev>')
+            DEMO_FROM_EMAIL='Clarriva <onboarding@resend.dev>')
 
 
 class GeneratedAdminEmailTests(TestCase):
@@ -58,7 +58,7 @@ class GeneratedAdminEmailTests(TestCase):
         self.assertEqual(res.status_code, 201)
         body = json.loads(sent.call_args[0][0].data)
         self.assertEqual(body['to'], ['new@example.com'])
-        self.assertEqual(body['subject'], 'Your Clariva admin login')
+        self.assertEqual(body['subject'], 'Your Clarriva admin login')
         self.assertIn(res.json()['password'], body['text'])
         self.assertIn('new@example.com', body['text'])
         self.assertIn('/login', body['text'])

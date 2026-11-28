@@ -11,9 +11,7 @@ from rest_framework.exceptions import PermissionDenied
 from apps.permissions import IsStaffRole
 from apps.accounts.sessions import end_session
 from apps.fees.services import FeeService
-from .serializers import StudentSerializer, has_login, platform_domain
-import secrets
-import string
+from .serializers import StudentSerializer, has_login, new_password, parent_login, platform_domain
 
 
 class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
@@ -27,7 +25,7 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         # A form teacher adds students, imports them and hands out the logins for
         # their own class, so these are open to staff. The checks below still keep
         # them inside their own class.
-        if self.action in ('bulk_create_accounts', 'reset_password',
+        if self.action in ('bulk_create_accounts', 'reset_password', 'reset_parent_password',
                            'create_account', 'sign_out_everywhere',
                            'create', 'import_csv'):
             return [IsStaffRole()]
@@ -71,7 +69,6 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         """
         import csv, io
         from apps.classes.models import Class
-        from apps.base.encryption import hash_value
         from apps.students.models import StudentProfile
         from .serializers import next_admission_no, student_credentials, unique_username
 
@@ -134,7 +131,6 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
 
     def _create_imported(self, school, parsed, default_class_id, errors):
         """Create the rows that passed the checks. One bad row is reported, not fatal."""
-        from apps.base.encryption import hash_value
         from apps.students.models import StudentProfile
         from .serializers import next_admission_no, student_credentials
 
@@ -150,20 +146,20 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                                 gender=row.get('gender') or None, role='student')
                     # The import makes a working login, not just a record.
                     user.set_password(password)
-                    user.must_change_password = True
                     user.save()
                     StudentProfile.objects.create(
-                        user=user, school=school, admission_no=adm, admission_no_hash=hash_value(adm),
+                        user=user, school=school, admission_no=adm,
                         class_group_id=cls.id if cls else default_class_id,
                         guardian_name=row.get('guardian_name') or None,
                         guardian_phone=row.get('guardian_phone') or None,
                         guardian_email=row.get('guardian_email') or None,
                         student_status='active',
                     )
+                    parent_password = parent_login(user)
                 FeeService.invoice_student(user)
                 created += 1
-                students.append({'name': name, 'admission_no': adm,
-                                 'email': email, 'password': password})
+                students.append({'name': name, 'admission_no': adm, 'email': email,
+                                 'password': password, 'parent_password': parent_password})
             except Exception as e:
                 errors.append(f'Row {item["row"]}: {e}')
         return created, students
@@ -194,25 +190,33 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
             counter += 1
         return username
 
+    def _give_login(self, student):
+        """A new login for a student who has none. Returns the details to hand out."""
+        sp = getattr(student, 'student_profile', None)
+        identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
+        suffix = self._sanitize_admission(identifier)
+        email = f'{suffix}@{student.school.subdomain}.{platform_domain()}'
+        password = new_password()
+        student.username = self._generate_student_username(identifier, student.school)
+        student.email = email
+        student.set_password(password)
+        student.save()
+        return {'admission_no': identifier, 'email': email, 'password': password}
+
     @action(detail=True, methods=['post'])
     def create_account(self, request, pk=None):
         student = self.get_object()
         if has_login(student):
             return Response({'error': 'Account already exists'}, status=status.HTTP_400_BAD_REQUEST)
-        sp = getattr(student, 'student_profile', None)
-        identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
-        suffix = self._sanitize_admission(identifier)
-        email = f'{suffix}@{student.school.subdomain}.{platform_domain()}'
-        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-        student.username = self._generate_student_username(identifier, student.school)
-        student.email = email
-        student.set_password(password)
-        student.save()
-        return Response({'admission_no': identifier, 'email': email, 'password': password},
-                        status=status.HTTP_201_CREATED)
+        with transaction.atomic():
+            details = self._give_login(student)
+            details['parent_password'] = parent_login(student)
+        return Response(details, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'])
     def bulk_create_accounts(self, request):
+        """Make whatever is missing in a class: student logins, parent logins, or both.
+        An empty password in a row means that login already existed and was left alone."""
         class_id = request.data.get('class_id')
         if not class_id:
             return Response({'error': 'class_id required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -224,20 +228,18 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
                                 status=status.HTTP_403_FORBIDDEN)
         students = User.objects.filter(
             student_profile__class_group_id=class_id, school=request.user.school, role='student',
-        ).filter(Q(password='') | Q(password__startswith='!'))
+        ).select_related('student_profile', 'school')
         created = []
         for student in students:
-            sp = getattr(student, 'student_profile', None)
-            identifier = sp.admission_no if sp and sp.admission_no else str(student.id)
-            suffix = self._sanitize_admission(identifier)
-            email = f'{suffix}@{student.school.subdomain}.{platform_domain()}'
-            password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-            student.username = self._generate_student_username(identifier, student.school)
-            student.email = email
-            student.set_password(password)
-            student.save()
-            created.append({'name': student.get_full_name(), 'admission_no': identifier,
-                            'email': email, 'password': password})
+            with transaction.atomic():
+                if has_login(student):
+                    sp = student.student_profile
+                    details = {'admission_no': sp.admission_no, 'email': student.email, 'password': ''}
+                else:
+                    details = self._give_login(student)
+                details['parent_password'] = parent_login(student)
+            if details['password'] or details['parent_password']:
+                created.append({'name': student.get_full_name(), **details})
         return Response({'created': created})
 
     @action(detail=True, methods=['post'])
@@ -245,12 +247,23 @@ class StudentViewSet(SchoolFilterMixin, viewsets.ModelViewSet):
         student = self.get_object()
         if not has_login(student):
             return Response({'error': 'No account exists for this student'}, status=status.HTTP_400_BAD_REQUEST)
-        password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+        password = new_password()
         student.set_password(password)
         student.save()
         sp = getattr(student, 'student_profile', None)
         return Response({'admission_no': sp.admission_no if sp else None, 'email': student.email,
                          'password': password})
+
+    @action(detail=True, methods=['post'])
+    def reset_parent_password(self, request, pk=None):
+        """A new password for this child's parent, making the parent account if there is none."""
+        student = self.get_object()
+        password = parent_login(student, reset=True)
+        if not password:
+            return Response({'error': 'This student has no admission number yet.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response({'admission_no': student.student_profile.admission_no,
+                         'parent_password': password})
 
     @action(detail=True, methods=['post'])
     def sign_out_everywhere(self, request, pk=None):

@@ -7,9 +7,10 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.accounts.models import User
-from apps.base.encryption import hash_value
 from apps.classes.models import Class
 from apps.fees.services import FeeService
+from apps.guardian.services import generated_parent
+from apps.guardian.models import GuardianStudent
 from .models import StudentProfile
 
 # Fields that live on the profile, not the user. They are read from the request and saved there.
@@ -27,12 +28,22 @@ def sanitize_admission(admission_no):
     return re.sub(r'[^a-z0-9]+', '-', str(admission_no).lower()).strip('-')
 
 
+def school_code(school):
+    """A short code from the school's name: Queens College -> QC."""
+    words = re.findall(r'[A-Z0-9]+', (school.name or '').upper().replace("'", '').replace('\u2019', ''))
+    words = [w for w in words if w not in ('AND', 'OF', 'THE')]
+    if len(words) == 1:
+        return words[0][:3]
+    return ''.join(w[0] for w in words)[:5] or 'SCH'
+
+
 def next_admission_no(school):
-    """CLR/<year>/<5 digits>, the next one nobody has used."""
+    """<school code>/<year>/<5 digits>, the next one nobody has used."""
     year = date.today().year
+    code = school_code(school)
     seq = StudentProfile.objects.filter(school=school).count() + 1
     while True:
-        candidate = f'CLR/{year}/{seq:05d}'
+        candidate = f'{code}/{year}/{seq:05d}'
         if not StudentProfile.objects.filter(admission_no=candidate).exists():
             return candidate
         seq += 1
@@ -53,6 +64,48 @@ def platform_domain():
     return (getattr(settings, 'PLATFORM_DOMAIN', '') or 'clarriva.com').strip()
 
 
+def new_password():
+    return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+
+
+@transaction.atomic
+def parent_login(student, reset=False):
+    """The parent account that goes with a student's login. A parent signs in with the child's
+    admission number and this password, which is never the student's own.
+
+    Returns the new password, or '' when nothing changed: the parent already has an account
+    (and no reset was asked for), or the student has no admission number to sign in with.
+
+    shortcut: one parent account per child, so two children mean two sign-ins. Link siblings
+    to one account when parents ask for it.
+    """
+    profile = getattr(student, 'student_profile', None)
+    if not (profile and profile.admission_no):
+        return ''
+    parent = generated_parent(student=student)
+    if parent and not reset:
+        return ''
+    password = new_password()
+    if parent is None:
+        name = f'parent.{sanitize_admission(profile.admission_no)}'
+        username, n = name, 1
+        while User.objects.filter(username=username).exists():
+            username = f'{name}{n}'
+            n += 1
+        parent = User(
+            school=student.school, role='parent', username=username,
+            email=f'{username}@{student.school.subdomain}.{platform_domain()}',
+            first_name='Parent of', last_name=student.get_full_name()[:150],
+        )
+        parent.set_password(password)
+        parent.save()
+        GuardianStudent.objects.create(guardian=parent, student=student)
+    else:
+        parent.set_password(password)
+        parent.save(update_fields=['password'])
+    return password
+
+
 def student_credentials(school, admission_no):
     """The username, email and password a new student signs in with.
 
@@ -66,8 +119,7 @@ def student_credentials(school, admission_no):
     while User.objects.filter(email__iexact=email).exists():
         email = f'{suffix}{n}@{school.subdomain}.{domain}'
         n += 1
-    password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-    return username, email, password
+    return username, email, new_password()
 
 
 class StudentSerializer(serializers.ModelSerializer):
@@ -185,14 +237,12 @@ class StudentSerializer(serializers.ModelSerializer):
             profile.school = user.school
         for key, val in data.items():
             if key == 'admission_no':
-                if val and val != profile.admission_no:
+                if val:
                     profile.admission_no = val
-                    profile.admission_no_hash = hash_value(val)
                 continue
             setattr(profile, key, val)
         if not profile.admission_no:
             profile.admission_no = next_admission_no(user.school)
-            profile.admission_no_hash = hash_value(profile.admission_no)
         profile.save()
         FeeService.invoice_student(user)
 

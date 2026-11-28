@@ -34,7 +34,7 @@ def _request(method, path, payload=None):
         headers={
             'Authorization': f'Bearer {secret}',
             'Content-Type': 'application/json',
-            'User-Agent': 'clariva-backend',
+            'User-Agent': 'clarriva-backend',
         },
     )
     try:

@@ -16,7 +16,7 @@ def send_email(to, subject, text, reply_to='') -> bool:
     """Send one email to an address or a list of them. False when mail is not set up or fails."""
     key = getattr(settings, 'RESEND_API_KEY', '')
     sender = (getattr(settings, 'BILLING_FROM_EMAIL', '') or getattr(settings, 'DEMO_FROM_EMAIL', '')
-              or 'Clariva <onboarding@resend.dev>')
+              or 'Clarriva <onboarding@resend.dev>')
     recipients = [to] if isinstance(to, str) else list(to or [])
     recipients = [r for r in recipients if r]
     if not (key and recipients):
@@ -28,7 +28,7 @@ def send_email(to, subject, text, reply_to='') -> bool:
         'https://api.resend.com/emails', data=json.dumps(payload).encode(), method='POST',
         # Resend's firewall rejects the default Python user agent.
         headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json',
-                 'User-Agent': 'clariva-backend'},
+                 'User-Agent': 'clarriva-backend'},
     )
     try:
         urlopen(req, timeout=5).close()

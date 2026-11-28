@@ -1,4 +1,4 @@
-# Clariva — Backend
+# Clarriva — Backend
 
 Django 5 REST API for school management: CBT exams, fees, grades, timetables, attendance, and parent portal.
 
@@ -25,7 +25,7 @@ apps/
 ├── fees/         # Fee items (ARM-level pricing), invoices
 ├── grades/       # CA1/CA2/assignment/exam scores, grading config
 ├── attendance/   # Daily attendance records
-├── guardian/     # Parent/guardian portal (lookup, OTP login, children)
+├── guardian/     # Parent/guardian portal (lookup, linked children)
 ├── locations/    # States, LGAs (school onboarding)
 ├── comms/        # Announcements
 ├── audit/        # Automatic activity logging (post_save/post_delete signals)
@@ -125,6 +125,6 @@ Test coverage spans: DOCX parsing, CBT start/submit/grading, tenant scoping (sch
 ## CI
 
 GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push/PR to main:
-- Python 3.10 + PostgreSQL 15
+- Python 3.12 + PostgreSQL 15
 - Migrations check (`makemigrations --check --dry-run`)
 - System check + full test suite

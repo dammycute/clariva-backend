@@ -14,7 +14,6 @@ from .serializers import (
 )
 from .models import User
 from .sessions import start_session, end_session
-from apps.base.encryption import hash_value
 from apps.base.mail import send_email
 
 logger = logging.getLogger('apps')
@@ -154,10 +153,10 @@ class AdminGenerateLoginView(generics.GenericAPIView):
         user.save()
         name = f'{user.first_name} {user.last_name}'.strip() or user.email
         emailed = send_email(
-            user.email, 'Your Clariva admin login',
+            user.email, 'Your Clarriva admin login',
             '\n'.join([
                 f'Hello {name},', '',
-                'An admin account has been created for you on Clariva.', '',
+                'An admin account has been created for you on Clarriva.', '',
                 f'Sign in at: {platform_sign_in()}',
                 f'Email: {user.email}',
                 f'Password: {password}', '',
@@ -202,7 +201,7 @@ class StudentLoginView(generics.GenericAPIView):
         students = User.objects.filter(role='student')
         if school_id:
             students = students.filter(school_id=school_id)
-        user = (students.filter(student_profile__admission_no_hash__in=[hash_value(student_id), hash_value(student_id.upper())]).first()
+        user = (students.filter(student_profile__admission_no__in=[student_id, student_id.upper()]).first()
                 or students.filter(email__iexact=student_id).first()
                 or students.filter(username__iexact=student_id).first())
         if user is None:
